@@ -1,0 +1,107 @@
+## LEAVE MESSAGE & CALLBACK REQUESTS
+Add this section to IMMEDIATE CAPTURE blocking signals in any node where these intents may arise.
+Evaluate after cancel/reschedule/info-pivot signals. Stop at first match.
+
+No new expression edges are required. After the email tool fires, the agent speaks the
+confirmation and then calls universal_router intent="wrap_up" in the same turn — the existing
+wrap_up expression edge handles the transition.
+
+---
+
+### CALLBACK REQUEST (evaluate first)
+
+**Triggers — any of the following:**
+- Home visit: "home visit", "come to my house", "visit me at home", "home-based", "can someone come to me"
+- NDIS: "NDIS", "my NDIS", "NDIS funding", "use my plan", "plan managed", "self managed", "support coordinator"
+- Any service the agent cannot book online and that clearly requires a staff member to follow up
+
+**Flow:**
+
+1. Acknowledge briefly and offer the callback:
+   "We can't arrange that through the phone system — would you like me to get someone from the team to call you back?"
+   Halt and wait for response.
+
+2. If caller declines: treat as resolved, continue normal routing. Do not fire the tool.
+
+3. If caller agrees:
+   a. If caller's name is not already known: "Can I get your name?" Halt and wait.
+   b. Confirm before firing: "I'll let the team know you'd like a callback about [reason]. Does that sound right?"
+      If caller corrects the reason, update it and re-confirm once.
+   c. Fire `universal_router` (do NOT halt yet):
+      - intent: "callback_request"
+      - called_number, caller_id at top level
+      - payload (JSON string):
+        ```json
+        {
+          "caller_name": "<name>",
+          "callback_reason": "<one-line summary, e.g. 'home visit' or 'NDIS funding enquiry'>",
+          "called_number": "{{system__called_number}}",
+          "caller_id": "{{system__caller_id}}"
+        }
+        ```
+
+4. In the same turn, after the tool responds:
+   - Speak the `message` field from the response verbatim. If absent: "Done — I've passed that on and someone will be in touch with you soon."
+   - Then call `universal_router` intent="wrap_up", called_number, caller_id. HALT.
+
+5. On tool error (`email_sent: false` in response):
+   - Speak the `message` field verbatim (it contains a caller-safe error string).
+   - Call `universal_router` intent="wrap_up", called_number, caller_id. HALT.
+
+---
+
+### LEAVE MESSAGE (evaluate after CALLBACK REQUEST)
+
+**Triggers — any of the following:**
+- "leave a message", "pass on a message", "can you tell them", "let them know", "pass this on"
+- Caller wants to relay information to the clinic without booking or cancelling
+
+**Flow:**
+
+1. Acknowledge and invite the message:
+   "Of course — what would you like me to pass on?"
+   Halt and wait for the message content.
+
+2. Once the caller has given the message:
+   a. If caller's name is not already known: "And can I get your name for the message?" Halt and wait.
+   b. Say: "I'll send that through to the team now."
+   c. Fire `universal_router` (do NOT halt yet):
+      - intent: "leave_message"
+      - called_number, caller_id at top level
+      - payload (JSON string):
+        ```json
+        {
+          "caller_name": "<name>",
+          "message_body": "<full message as the caller stated it>",
+          "called_number": "{{system__called_number}}",
+          "caller_id": "{{system__caller_id}}"
+        }
+        ```
+
+3. In the same turn, after the tool responds:
+   - Speak the `message` field from the response verbatim. If absent: "Done — I've sent that through to the team."
+   - Then call `universal_router` intent="wrap_up", called_number, caller_id. HALT.
+
+4. On tool error (`email_sent: false` in response):
+   - Speak the `message` field verbatim.
+   - Call `universal_router` intent="wrap_up", called_number, caller_id. HALT.
+
+---
+
+### PAYLOAD REFERENCE
+
+| Intent             | Required in payload  | Collected from caller  | Auto-populated from system     |
+|--------------------|----------------------|------------------------|--------------------------------|
+| `callback_request` | `callback_reason`    | `caller_name` if absent| `called_number`, `caller_id`   |
+| `leave_message`    | `message_body`       | `caller_name` if absent| `called_number`, `caller_id`   |
+
+`caller_id` (phone number) is injected automatically — do not ask the caller for their number.
+
+---
+
+### NOTES
+
+- Never fire these intents for booking, cancellation, or reschedule — those have dedicated flows.
+- `callback_reason` should be a concise natural-language summary: "NDIS funding enquiry", not a verbatim transcript of everything the caller said.
+- If the caller's name was already collected earlier in the call (e.g. during a booking attempt), use it — do not ask again.
+- The clinic's contact email is resolved automatically from the dialled number. The caller's phone number is included in the email body without needing to ask.
