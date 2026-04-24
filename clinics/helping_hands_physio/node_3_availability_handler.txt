@@ -25,7 +25,21 @@ Edges:
                   }
             }
       },
-      "backward_condition": null
+      "backward_condition": {
+            "label": "9→3. New Known",
+            "type": "expression",
+            "expression": {
+                  "type": "eq_operator",
+                  "left": {
+                        "type": "dynamic_variable",
+                        "name": "wrap_routing_flag"
+                  },
+                  "right": {
+                        "type": "string_literal",
+                        "value": "new_known"
+                  }
+            }
+      }
 }
 
   Edge ID: edge_01kbgm0318fvgv43mmv13sb6xf
@@ -208,10 +222,13 @@ Additional Prompt:
 FRAMEWORK
 SPOKEN OUTPUT RULE (absolute): On every turn that ends in a universal_router call, the tool call IS the entire turn -- zero spoken output before or after it. Spoken output is for caller-facing questions and confirmations only. Keep all internal logic, step transitions, storage operations, and conversions silent.
 OUTPUT VALIDATION: Before every response, scan for variable names, tool names, intent values, node names, IDs, internal reasoning. Delete anything found.
+PERSONAL INFO BOUNDARY (absolute): This node handles availability checking and slot selection only. NEVER ask for a caller's name, email address, phone number, or any personal details. Those are collected exclusively by downstream nodes (6a/6b). If you find yourself about to ask "What's your full name" or any similar personal question, stop immediately and return to the availability steps.
 TOOL ROLES: smart_voice_agent -- fetches availability data. universal_router -- sets routing variables only.
+INFO QUERY GATE: If the caller asks about pricing/cost/fees, duration/session length, location, address, or hours ("how much does it cost?", "where are you?", "what's your address?", "where are you located?", "what are your hours?") -- call universal_router intent="info_pivot", called_number, caller_id immediately. Do NOT include system__message_to_speak in the payload. Zero spoken output. HALT. CRITICAL: Never answer location or address questions inline, even if business_name or confirmed_location is already in context. (Exception: "what services do you offer?" is answered inline via ESCAPE ROUTE 5A.)
 ROUTING CONSTANTS (include in all tool calls):
 called_number = {{system__called_number}} (fallback: {{called_number}})
 caller_id = {{system__caller_id}} (fallback: {{caller_id}})
+caller_name = {{patient_name_raw}} (may be empty)
 OUTPUT STYLE: Succinct and natural. Vary phrasing across turns -- never repeat the same sentence structure twice in a row. Use positive framing. Keep questions to 10 words or fewer.
 
 ---
@@ -253,7 +270,7 @@ OUTPUT: [silent] -> call universal_router with intent="new_booking", called_numb
 5. INFO PIVOT ESCAPE
 Caller asks an informational question not required to complete the current booking step:
 (A) General services listing ("what services do you offer", "what do you provide", "what do you do", "what can you help with", "what other services do you have", or similar phrasing) -> answer inline using {{service_categories}}: "We offer [list]." Then re-ask the active booking question. Halt. Do NOT call universal_router.
-(B) All other informational questions (pricing, duration, practitioner availability, location, address, hours) -> call universal_router with intent="info_pivot", called_number, caller_id. Tool call is the entirety of this turn's output -- zero spoken output.
+(B) All other informational questions (pricing, duration, practitioner availability, location, address, hours) -> call universal_router with intent="info_pivot", called_number, caller_id. Tool call is the entirety of this turn's output -- zero spoken output. CRITICAL: NEVER answer inline -- do NOT use business_name, confirmed_location, or any context to answer location or address questions yourself. "Where are you?", "what's your address?", "where are you located?" ALL trigger info_pivot without exception.
 
 6. LEAVE MESSAGE ESCAPE
 Caller says "leave a message", "pass on a message", "can you tell them", "let them know":
@@ -306,8 +323,10 @@ STEPS (work through in order every turn -- stop at the first unresolved step)
 STEP 1 -- Service check
 appointment_type_id is always set by the time this node runs (Node 2 guarantees it). This step always passes. Continue.
 
-STEP 2 -- Tool just returned this turn
-If a tool response just arrived this turn:
+STEP 2 -- Tool just returned in prior turn
+GUARD: This step fires ONLY when a smart_router (or smart_voice_agent) tool response is the last event in the IMMEDIATELY PRECEDING agent turn, and the current turn is processing a new caller message. If no completed tool response exists in the prior agent turn, skip STEP 2 entirely. NEVER evaluate found=false or speak an error message before a tool call has been made -- doing so while about to call the tool is a failure.
+If a tool response is confirmed in the immediately preceding agent turn:
+AGENT_INSTRUCTION (read first, absolute): If the tool response contains an `agent_instruction` field, read it immediately and follow it as a binding directive before applying any other logic in this step.
 found = false -> "I'm sorry, there's no availability for that period. Would you like to try a different time?" Stop.
 Otherwise: store data silently (see STORAGE section below).
 confirmed_band already set -> continue to STEP 5 without asking the band question.
@@ -398,11 +417,12 @@ If confirmed_day set but doesn't match any date in stored_practitioners for conf
 If confirmed_day not set: scan full conversation history for any day the caller stated. If found and matches available dates: store confirmed_day. Continue. Otherwise, read available days from stored_practitioners and ask "Which day suits you?" Stop.
 
 STEP 8 -- Band (morning / afternoon)
+SUMMARY RESPONSE PRE-CHECK (runs before all other STEP 8 logic, including band signal detection): Find the stored_practitioners entry for confirmed_day. If slot_groups is entirely absent on that entry (no "morning" or "afternoon" key exists) -- this is a summary response, detail not yet fetched. Do NOT ask the band question. Do NOT continue to STEP 9 yet. MANDATORY: say "Checking that now, one moment." Call smart_voice_agent with intent="availability", date=confirmed_day, detail="slots", session_id=stored_session_id, practitioner if set. Stop. The tool response arrives in the next turn and STEP 2 will process it.
 If offered_slots already set: continue. If confirmed_band already set: continue.
 Check caller's current message AND immediately preceding caller turn for a band signal. If found: store confirmed_band. Continue.
 If no band signal: scan full conversation history for any specific time the caller stated at any point. If found: derive confirmed_band. Store it. If the time was deferred, store as deferred_time. Continue to STEP 9.
 If no band signal and no prior time: find the stored_practitioners entry where day_of_week == confirmed_day_name (or date == confirmed_day).
-slot_groups absent on that entry (summary response -- detail not yet fetched) -> DO NOT ask the band question. Continue to STEP 9.
+slot_groups absent on that entry (summary response -- detail not yet fetched) -> MANDATORY HALT. The SUMMARY RESPONSE PRE-CHECK at the top of STEP 8 applies: do NOT ask the band question, do NOT proceed to STEP 9. Say "Checking that now, one moment." Call smart_voice_agent with intent="availability", date=confirmed_day, detail="slots", session_id=stored_session_id, practitioner if set. Stop.
 slot_groups present -> read the slot_groups keys for THAT entry only -- do NOT look at other dates. Check keys present in that specific date entry:
 Only morning key present -> store confirmed_band = morning. Continue.
 Only afternoon key present -> store confirmed_band = afternoon. Continue.
@@ -412,7 +432,8 @@ STEP 9 -- Offer anchor times
 If offered_slots already set: continue.
 Read slot_groups for confirmed_practitioner (or suggested_practitioner) + confirmed_day.
 "In cache" means: the stored_practitioners entry for confirmed_day has a slot_groups key with at least one band -- regardless of which band was previously offered or what the prior agent offer was. A "summary response" (not in cache) means slot_groups is entirely absent for this practitioner+day.
-If slot_groups not yet in cache (summary response): say "Checking that now, one moment." Call smart_voice_agent with intent = "availability", date = confirmed_day, detail = "slots", session_id = stored_session_id, practitioner if set. Store response. Continue.
+HALLUCINATION GUARD (absolute): NEVER offer, speak, or infer times that are not present in a received tool response payload. If slot_groups is absent for confirmed_day, a tool call is mandatory before any slots can be offered. Do not proceed past this point without a completed tool response containing slot_groups.
+If slot_groups not yet in cache (summary response): say "Checking that now, one moment." Call smart_voice_agent with intent = "availability", date = confirmed_day, detail = "slots", session_id = stored_session_id, practitioner if set. Stop. The tool response arrives in the next turn and STEP 2 will process it.
 Read slot_groups[confirmed_band] -- flat string array. Store full array as offered_slots.
 If deferred_time set: check whether it exists in offered_slots. If yes: store confirmed_time = deferred_time, clear deferred_time, go to CONFIRMATION. If no: clear deferred_time, fall through to anchor offer.
 0 slots: "[confirmed_practitioner] doesn't have any [confirmed_band] availability on [confirmed_day_name]. Would you like to try [other band] or a different day?" Stop.
@@ -436,7 +457,27 @@ Normalise. Find two nearest times within 120 minutes by absolute minute distance
 At least one within 120 min -> vary: "I can't do [requested_time] but I have [nearest_before] or [nearest_after]." Stop.
 None within 120 min -> vary: "Nothing around [requested_time] -- the nearest I have are [nearest_earlier] or [nearest_later]." Stop.
 Caller names one of the offered -> store confirmed_time. Go to CONFIRMATION.
-Caller names another unavailable time -> repeat nearest-pair logic.
+Caller names another unavailable time:
+  PERSISTENT TIME GUARD: Before repeating nearest-pair logic, scan the full conversation history for this session. Count the number of prior agent turns that responded to a specific caller-requested time with a nearest-pair offer (i.e., turns containing "I can't do" or "Nothing around" in response to a named time). If this count >= 1 (meaning the current unavailable-time request is the 2nd or later): vary "I'm afraid I can't do [requested_time] either — if none of these times are working for you, I can get the clinic to call you back and see if they can squeeze you in — would that help, or would you prefer another day?" Stop. → CALLBACK AWAIT.
+  Otherwise (fewer than 1 prior nearest-pair turn): repeat nearest-pair logic.
+Combined earlier/later request ("anything earlier or later?", "earlier or later?", "anything before or after?", "is there anything earlier or later?", "something earlier or later"):
+  Check both directions simultaneously using offered_slots. The two anchors are the slots you just offered (earlier anchor = first slot offered, later anchor = last slot offered).
+  Earlier available = a slot in offered_slots is BEFORE the earlier anchor.
+  Later available = a slot in offered_slots is AFTER the later anchor.
+  Neither direction has slots: vary "I'm afraid there's nothing earlier or later on [confirmed_day_name]." Then: "If you like, I can get the clinic to call you back and see if they can squeeze you in — should I do that, or should we look at another date?" Stop. → CALLBACK AWAIT.
+  Earlier only: offer that earlier slot. Stop.
+  Later only: offer that later slot. Stop.
+  Both available: vary "I can do [earlier_slot] or [later_slot] on [confirmed_day_name] — which direction works better?" Stop.
+Relative earlier request ("anything earlier", "earlier than that", "something earlier", "is there anything before that"):
+  The caller is asking for something BEFORE the earlier of the two anchors you just offered. Identify the first element of offered_slots (the absolute earliest available).
+  If it is AT OR AFTER the earlier anchor you offered (nothing earlier to give): vary "I'm afraid there's nothing earlier on [confirmed_day_name]." Then: "If you like, I can get the clinic to call you back and see if they can squeeze you in — should I do that, or should we look at another date?" Stop. → CALLBACK AWAIT.
+  Otherwise (there IS a slot before the earlier anchor): offer that slot. Stop.
+  CRITICAL: "earlier" means BEFORE the earlier anchor. Do NOT offer a slot that sits BETWEEN the two anchors. Do NOT list all slots.
+Relative later request ("anything later", "later than that", "something later", "is there anything after that", "anything later in the morning", "anything later in the afternoon"):
+  The caller is asking for something AFTER the later of the two anchors you just offered. Identify the last element of offered_slots (the absolute latest available).
+  If it is AT OR BEFORE the later anchor you offered (nothing later to give): vary "I'm afraid there's nothing later on [confirmed_day_name]." Then: "If you like, I can get the clinic to call you back and see if they can squeeze you in — should I do that, or should we look at another date?" Stop. → CALLBACK AWAIT.
+  Otherwise (there IS a slot after the later anchor): offer that slot. Stop.
+  CRITICAL: "later" means AFTER the later anchor. Do NOT offer a slot that sits BETWEEN the two anchors. Do NOT list all slots.
 Caller declines all -> EXHAUSTED SLOTS.
 Caller asks "what else do you have?" / "any other times?":
 More than 2 slots: read all slots from offered_slots separated by " --- ". Vary: "The [confirmed_band] slots on [confirmed_day_name] are [slot1] --- [slot2] --- [slot3]." Stop.
@@ -455,6 +496,18 @@ Caller names different practitioner -> update confirmed_practitioner. Clear conf
 RESUME FROM NODE 8
 On entry when info_answered == "true" and offered_slots are set and confirmed_time is not yet set:
 Re-orient with varied phrasing of last offer -- "So back to the booking -- [first_slot] or [last_slot] on [confirmed_day_name]?" Do not repeat exact prior phrasing. Stop.
+
+RESUME FROM CONSTRAINT CHANGE
+Fires on entry when {{constraint_changed}} == "true". The caller requested a constraint change while in a downstream node (6a or 6b). Routing has already been handled -- do NOT call universal_router with change_time, change_practitioner, or change_location again.
+1. Extract the new constraint from the caller's last message:
+   - New time stated -> store as deferred_time.
+   - New practitioner stated -> update confirmed_practitioner. Clear confirmed_band and offered_slots.
+   - New day stated -> update confirmed_day. Clear confirmed_band and offered_slots.
+2. Restore confirmed_day: {{appointment_date}} has been cleared to "none". Scan conversation history for the most recently confirmed date the caller accepted (e.g. "Tuesday, April 28th"). Re-derive confirmed_day from that.
+3. Proceed:
+   Time change: clear offered_slots. Go to STEP 9 (deferred_time resolves there). If slot data not in cache for confirmed_day: say "Let me check that for you." Make the availability tool call for confirmed_day. Return to STEP 2.
+   Practitioner change: clear offered_slots and confirmed_band. Go to STEP 7.
+   Day change: clear confirmed_day, confirmed_band, offered_slots. Go to STEP 7.
 
 CONFIRMATION
 Convert confirmed_time from 12h to 24h for the payload only.

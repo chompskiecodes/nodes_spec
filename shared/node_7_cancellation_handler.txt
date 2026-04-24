@@ -57,15 +57,31 @@ Edges:
                               }
                         },
                         {
-                              "type": "eq_operator",
-                              "left": {
-                                    "type": "dynamic_variable",
-                                    "name": "wrap_routing_flag"
-                              },
-                              "right": {
-                                    "type": "string_literal",
-                                    "value": "cancel"
-                              }
+                              "type": "and_operator",
+                              "children": [
+                                    {
+                                          "type": "eq_operator",
+                                          "left": {
+                                                "type": "dynamic_variable",
+                                                "name": "wrap_routing_flag"
+                                          },
+                                          "right": {
+                                                "type": "string_literal",
+                                                "value": "cancel"
+                                          }
+                                    },
+                                    {
+                                          "type": "neq_operator",
+                                          "left": {
+                                                "type": "dynamic_variable",
+                                                "name": "reschedule_mode"
+                                          },
+                                          "right": {
+                                                "type": "string_literal",
+                                                "value": "true"
+                                          }
+                                    }
+                              ]
                         }
                   ]
             }
@@ -177,7 +193,7 @@ Scan the caller's message for the following signals. For each detected signal, f
 
 ### Blocking signals
 Call universal_router (these change routing state). Evaluate in order, stop at first match:
-1. INFO PIVOT: caller asks a purely informational question (pricing, duration, address, location, hours, practitioner availability, or any general clinic question) during active flow -- these are NEVER handled inline in this node -> universal_router intent="info_pivot", called_number, caller_id. HALT. Do NOT fire if a STEP 2 tool call is already in progress or has already returned this session.
+1. INFO PIVOT: caller asks a purely informational question (pricing, duration, address, location, hours, practitioner availability, or any general clinic question) during active flow -- these are NEVER handled inline in this node, even if address, location, or other data is already in context -> universal_router intent="info_pivot", called_number, caller_id. HALT. Do NOT fire if a STEP 2 tool call is already in progress or has already returned this session.
 2. WRAP-UP: caller signals end of call -> universal_router intent="wrap_up", called_number, caller_id. HALT.
 3. LEAVE MESSAGE: caller says "leave a message", "pass on a message", "can you tell them", "let them know" → say "What would you like me to pass on?" Wait for reply. If caller name not known, ask "And can I get your name?" Then call universal_router intent="leave_message", called_number, caller_id, payload { "caller_name": "<name>", "message_body": "<message>" }. Speak response message field verbatim. Call universal_router intent="wrap_up", called_number, caller_id. HALT.
 4. CALLBACK REQUEST: caller requests NDIS, home visit, or service that can't be booked online → say "Would you like me to get someone from the team to call you back?" Wait for reply. If agreed, confirm reason and collect name if unknown. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "<reason>" }. Speak response message field verbatim. Call universal_router intent="wrap_up", called_number, caller_id. HALT.
@@ -235,10 +251,13 @@ IF conversation history contains a prior successful smart_router cancel response
   Go directly to STEP 2 with that phone number.
 
 ### PATH D
-IF caller message expresses intent to view/check upcoming appointments
+IF caller message expresses intent to view/check/confirm upcoming appointments
           ("check my appointment", "when is my appointment", "what time is my
           appointment", "do I have an appointment", "upcoming appointments",
-          "check if I have any appointments"):
+          "check if I have any appointments", "confirm my appointment",
+          "confirm an appointment", "confirm", "just confirming", "I want to confirm",
+          "confirm the appointment", "checking my appointment"):
+  CONFIRM = VIEW DETAILS ONLY. The caller wants to know when their appointment is. Do NOT interpret this as a request to book, create, or reschedule anything.
   Do NOT ask phone confirmation.
   OUTPUT "Checking that now, one moment."
   Call smart_router in SAME response:
@@ -280,6 +299,12 @@ After response: extract and STORE appointment_id and session_id immediately.
 
 ## HANDLE RESPONSES
 
+### Details Return (smart_router was called with intent="details")
+Speak message field VERBATIM.
+Call universal_router with intent="wrap_up", called_number, caller_id in the SAME response. HALT.
+Do NOT ask the caller what they want to do next. Do NOT ask about cancellation or rescheduling.
+If the caller then says "confirm", "yes", "that's right", "correct", "okay", "thanks" -- treat as call-end acknowledgement. Wrap up. Do NOT call smart_router again.
+
 ### Multiple Appointments Found
 
 Read message verbatim. Wait for caller to specify: "the first one" / "number 1" / "the Tuesday one" / "the 10am one". If only one appointment remains from a prior cancellation in this session, state it and wait for confirmation before calling the tool.
@@ -310,19 +335,8 @@ Read warning VERBATIM. Wait for confirmation.
 
 ### Success
 Read confirmation VERBATIM from tool response.
-  IF {{reschedule_mode}} == "true":
-    Call universal_router in SAME response:
-      intent: "reschedule_pending"
-      payload: {
-        cancellation_completed: "none",
-        called_number: {{system__called_number}} or {{called_number}},
-        caller_id: {{system__caller_id}} or {{caller_id}}
-      }
-    HALT.
-  ELSE:
-    Call wrap_router in SAME response:
-      intent: "wrap_cancel"
-    HALT.
+CRITICAL — DO NOT ask any question. DO NOT search availability. DO NOT call any routing tool. Your turn ends after speaking the message. HALT.
+(Routing is handled automatically by expression edges — Node 7b for reschedule, Node 9 for normal cancel.)
 
 ### Not Found
 
@@ -347,3 +361,4 @@ Call wrap_router in SAME response:
 
 Speak tool message fields verbatim  --  no paraphrasing, no summarising, no expanding.
 appointment_id: use the 15+ digit value from the appointment_candidates array only.
+BOOKING PROHIBITION: intent="book" is ABSOLUTELY FORBIDDEN in this node. The only valid smart_router intents here are "cancel" and "details". There is no caller statement, no phrasing, and no scenario in this node that justifies intent="book". If any reasoning step produces intent="book": STOP, discard it, and force a binary decision -- (A) caller wants to cancel → use intent="cancel"; (B) caller wants to check or confirm their appointment → use intent="details". Pick A or B. Nothing else exists.
