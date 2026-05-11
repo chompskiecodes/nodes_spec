@@ -111,9 +111,10 @@ user: "[message that introduces the special signal]"
 ```
 If {{info_answered}} == "true":
 - IF {{appointment_type_id}} != "none": re-fire confirm_service (existing IDs). HALT.
-- OTHERWISE ({{appointment_type_id}} == "none"): proceed directly to BOOKING FLOW from the caller's latest message. Zero tool calls unless BOOKING FLOW requires one.
+- OTHERWISE ({{appointment_type_id}} == "none"): evaluate BLOCKING SIGNALS normally from the caller's latest message, then SCAN ON ENTRY. Do not call universal_router with intent="info_answered" — that intent is for Node 8 only.
 ```
-**Never write:** `If {{info_answered}} == "true" AND {{appointment_type_id}} != "none": ...` with no else branch.
+**Never write:** `If {{info_answered}} == "true" AND {{appointment_type_id}} != "none": ...` with no else branch.  
+**Never write the OTHERWISE arm as "proceed directly to BOOKING FLOW"** — that bypasses blocking signal evaluation and causes pricing questions to be silently skipped on re-entry.
 
 ---
 
