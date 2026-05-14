@@ -1,0 +1,892 @@
+Here's the full document condensed to maximum token efficiency with zero information loss:
+
+---
+
+# Multi-Node Clinic Voice Agent — Architecture Reference
+
+Graph-based phone agent handling bookings, cancellations, rescheduling, and enquiries. Deterministic routing over LLM judgement. Minimal variables in flight at any time.
+
+---
+
+## Node Inventory
+
+| Node | Label | LLM | Override | Role |
+|---|---|---|---|---|
+| 1 | Entry Greeting Router | gemini-2.5-flash | Enabled | Classifies initial intent, fires async context capture, silent router |
+| 2 | Service Resolution | claude-haiku-4-5 | Disabled | Resolves appointment type and patient status |
+| 2C | Complaint Intake | claude-haiku-4-5 | Enabled | Collects symptom details, maps complaint to practitioner (practitioner-due clinics only) |
+| 3 | Availability Handler | claude-haiku-4-5 | Disabled | Searches availability, confirms time slot |
+| 6a | Name Collection — Self | claude-haiku-4-5 | Enabled | Collects name and email, executes booking |
+| 6b | Name Collection — Other | claude-haiku-4-5 | Enabled | Collects name, phone, and email for third-party bookings |
+| 7 | Cancellation Handler | claude-haiku-4-5 | Enabled | Cancels or checks existing appointments |
+| 7b | Rescheduler | gemini-2.5-flash | Enabled | Routes post-cancel rebook: same or different service |
+| 8 | Information Handler | claude-haiku-4-5 | Enabled | Answers clinic questions, pivots back to booking flow |
+| 9 | Wrap Up | gemini-2.5-flash | Enabled | Asks if anything else needed, ends call or routes new intent |
+| 11 | Error Recovery | gemini-3.1-flash-lite-preview | Enabled | Retries failed tool calls, escalates to manual fallback |
+
+Node 10 (Constraint Change Router) removed. Its routing logic now lives in Nodes 3, 6a, and 6b.
+
+Node 2C is optional — only present in practitioner-due clinic agents. See Practitioner-Due Clinics section.
+
+---
+
+## Shared Node Sets
+
+Two parallel sets of shared node files exist. Every clinic agent uses exactly one set — never a mixture.
+
+| Set | Path | When to use |
+|---|---|---|
+| `nodes/shared/` | Standard | Clinic cannot accept live call transfers. "Speak to someone" → offer to email instead. |
+| `nodes/shared_agent_transfer/` | Transfer-enabled | Clinic has a live transfer number. "Speak to someone" → calls `transfer_to_number` tool and says "Sure, no problem. I'll transfer you now." |
+
+**Files in each set:** `node_1_entry_greeting_router.txt`, `node_6a_name_collection_self.txt`, `node_6b_name_collection_other.txt`, `node_6c_family_booking_confirm.txt`, `node_7_cancellation_handler.txt`, `node_7b_rescheduler.txt`, `node_9_wrap_up.txt`, `node_11_error_recovery.txt`
+
+**Key behavioural difference:**
+
+- `shared/` Node 1 CONTACT CLINIC rule: "I'm not able to transfer calls directly, but I can email the clinic team on your behalf." → leave_message → wrap_up.
+- `shared_agent_transfer/` Node 1 TRANSFER TO CLINIC rule: "Sure, no problem. I'll transfer you now." → call `transfer_to_number` with `transfer_number={{transfer_number}}`. HALT.
+
+- `shared/` other nodes (7, 7b, 6a/6b/6c, 9) SPEAK TO PRACTITIONER: same email-only path.
+- `shared_agent_transfer/` other nodes: SPEAK TO PRACTITIONER triggers live transfer via `transfer_to_number`.
+
+**Activation:** `clinic_agent_ids.json` entry determines which set is used. `batch_patch.py --shared` auto-selects the correct set.
+
+**`transfer_number` DV:** injected at session start via twilio_init_webhook. Both sets include it in SYSTEM VARIABLES — in the non-transfer set it is unused.
+
+**SHARED NODE SYNC rule:** any edit to a file in `nodes/shared/X.txt` MUST be applied to the matching `nodes/shared_agent_transfer/X.txt` in the same session. The two sets are structurally identical except for the transfer behaviour. Divergence is a bug.
+
+---
+
+## Override Decision Rule
+
+**Override: Disabled** — node uses the full framework AND runs claude-haiku-4-5. Currently only Nodes 2 and 3.
+
+**Override: Enabled** — all other nodes. Uses a MINI-FRAMEWORK, saving ~398 words/turn by excluding irrelevant framework sections. Mandatory for any non-Haiku LLM — Gemini and flash-lite nodes must never inherit the Haiku-tuned framework.
+
+---
+
+## Node Architecture
+
+Each node: LLM (spoken responses) + edges (routing) + additional prompt (node behaviour).
+
+**Override: Disabled** — inherits global framework. Additional prompt adds only node-specific behaviour.
+
+**Override: Enabled** — global framework not inherited. Node is entirely self-contained via MINI-FRAMEWORK. MINI-FRAMEWORKs are exact mirrors of the framework's universal sections. When universal rules change, all MINI-FRAMEWORKs update simultaneously. Divergence from the framework on a universal rule is a bug.
+
+---
+
+## The Edge System
+
+Edges are directional (source → target). Each node pair shares at most one edge. A forward condition and its backward condition live together on that single edge entry in the source node's file. A backward condition on A←B must never be expressed as a separate forward edge B→A — doing so duplicates the edge and causes API failure. The backward condition is defined in A's file only; B's file contains no entry for it.
+
+The API treats edges as undirected pairs — A→B and B→A in the same payload conflict regardless of direction. A backward_condition is fully functional routing from the target's perspective, not metadata. Incoming mirror entries are not redundant — they actively conflict.
+
+**Three edge types:**
+
+**Expression** — fire instantly when a variable condition is met, before any spoken output. Operators: `==`, `!=`, `AND`, `OR`. Compound conditions allow a single `uni_router_intent` value to route to multiple destinations based on other variables. Preferred pattern for all deterministic transitions.
+
+**LLM** — evaluated by a parallel model on conversation semantics. Race with text generation — only reliably fire on the next caller turn, not mid-response. Use only when destination genuinely depends on semantic content not capturable in variables.
+
+**Unconditional** — always fire. Used only for the start node entry point.
+
+**Race condition rule:** Never rely on an LLM edge to fire in the same turn as a tool call. If a tool result should trigger an immediate transition, set a dynamic variable and use an expression edge.
+
+### Expression edge JSON syntax
+
+The parser finds the first `{` to last `}` in each block and JSON-parses it. JSON must be valid and self-contained.
+
+**Simple equality:**
+```json
+{
+  "forward_condition": {
+    "label": "optional label",
+    "type": "expression",
+    "expression": {
+      "type": "eq_operator",
+      "left": { "type": "dynamic_variable", "name": "uni_router_intent" },
+      "right": { "type": "string_literal", "value": "booking_self" }
+    }
+  },
+  "backward_condition": null
+}
+```
+
+**AND (compound):**
+```json
+{
+  "forward_condition": {
+    "type": "expression",
+    "expression": {
+      "type": "and_operator",
+      "children": [
+        {
+          "type": "eq_operator",
+          "left": { "type": "dynamic_variable", "name": "cancellation_completed" },
+          "right": { "type": "string_literal", "value": "true" }
+        },
+        {
+          "type": "neq_operator",
+          "left": { "type": "dynamic_variable", "name": "reschedule_mode" },
+          "right": { "type": "string_literal", "value": "active" }
+        }
+      ]
+    }
+  },
+  "backward_condition": null
+}
+```
+
+**OR of ANDs (nested):**
+```json
+{
+  "forward_condition": {
+    "type": "expression",
+    "expression": {
+      "type": "or_operator",
+      "children": [
+        {
+          "type": "and_operator",
+          "children": [
+            {
+              "type": "eq_operator",
+              "left": { "type": "dynamic_variable", "name": "var_a" },
+              "right": { "type": "string_literal", "value": "val1" }
+            }
+          ]
+        },
+        {
+          "type": "eq_operator",
+          "left": { "type": "dynamic_variable", "name": "var_b" },
+          "right": { "type": "string_literal", "value": "val2" }
+        }
+      ]
+    }
+  },
+  "backward_condition": null
+}
+```
+
+**Syntax failure rules:**
+
+| Rule | Wrong | Correct |
+|---|---|---|
+| Top-level condition type | `"type": "or_operator"` | `"type": "expression"` with `"expression": {"type": "or_operator", ...}` |
+| Sub-items key | `"conditions": [...]` | `"children": [...]` |
+| Children item types | `{"type": "llm", ...}` inside `children` | Only `eq_operator`, `neq_operator`, `and_operator`, `or_operator` |
+| Mixing llm + expression | `or_operator` wrapping an `llm` child | Separate edges — one pure `llm`, one pure `expression` |
+
+---
+
+## Compound Expression Edge Patterns
+
+### Node 8 return routing
+```
+uni_router_intent == "info_answered" AND appointment_type_id == "none"                              → Node 2
+uni_router_intent == "info_answered" AND appointment_type_id != "none" AND appointment_date == "none" → Node 3
+uni_router_intent == "info_answered" AND appointment_date != "none" AND booking_for != "other"      → Node 6a
+uni_router_intent == "info_answered" AND appointment_date != "none" AND booking_for == "other"      → Node 6b
+```
+Node 8 → Node 9 uses `uni_router_intent == "wrap_up"`, not `info_answered`.
+
+### Node 7 → Node 9 (forward condition)
+```
+(cancellation_completed == "true" AND reschedule_mode != "true") OR uni_router_intent == "wrap_up"
+```
+
+### Node 9 → Node 7 (backward condition on the same edge)
+```
+uni_router_intent == "cancel_intent" OR wrap_routing_flag == "cancel"
+```
+`wrap_routing_flag=="cancel"` is set by `wrap_cancel` and `wrap_reschedule` intents. This is the path from Node 9 back to Node 7 — not part of the forward 7→9 condition.
+
+### Universal info pivot (all nodes except Node 8)
+```
+uni_router_intent == "info_pivot" → Node 8
+```
+
+### Node 8 → Node 9
+```
+uni_router_intent == "wrap_up" → Node 9
+```
+Handles two paths: (1) YES HANDLERs where `return_node` was `"9"` — these call `intent="wrap_up"` instead of `intent="info_answered"`; (2) caller signals end of call from within Node 8.
+
+`return_node` is included in the `info_pivot` payload only when originating from Node 9. All other nodes omit it — Node 8's compound expression edges infer return destination from booking variables already in flight. This eliminates stale `return_node` as a routing risk.
+
+---
+
+## The Three Tools
+
+| Condition | Tool |
+|---|---|
+| Caller volunteers a preference; nothing else this turn depends on it | async_capture_context |
+| Need to fire a specific expression edge | universal_router with matching intent |
+| Need to store variables synchronously without firing an edge | universal_router with intent="capture_context" |
+| Session-clearing wrap-up routing (Node 9, or Node 7 for wrap_cancel) | universal_router with wrap_* intent |
+| Business logic (availability, booking, cancel, patient lookup, service info) | smart_router (POST /api/v1/voice-agent) |
+
+After calling `universal_router` (any intent): HALT immediately. `async_capture_context` and `smart_router` do not require HALT.
+
+Node prompts use "wrap_router" as shorthand for "call universal_router with a wrap_* intent." No separate endpoint — wrap_* intents go to universal_router (POST /api/v1/webhook/universal_router).
+
+---
+
+## Tool 1 — async_capture_context
+
+POST /api/v1/async-capture-context — Fire-and-forget. No intent field. Conversation does not block on response. Returns `success: true` and echoes validated keys as dynamic variables. If `session_id` present, validated keys merge into `resolved_context` via non-blocking `update_session`.
+
+**Capturable fields:**
+
+| Key | Allowed values | Notes |
+|---|---|---|
+| booking_for | "self", "other" | "other" on explicit third-party language. "self" only when node asked an explicit "is this for you?" and caller confirms. Never send "self" on implicit first-person language — empty is the default self state. |
+| practitioner_preference | any non-empty string | |
+| timeframe_raw | any non-empty string | |
+| preferred_gender | "male", "female" | |
+| implied_service | any non-empty string | |
+| location | any non-empty string | |
+| patient_status | "new", "existing" | |
+| group_or_private | "group", "private" | |
+| reschedule_mode | "true" only | |
+| caller_complaint | any non-empty string | Exclusively via this tool — not via universal_router capture_context |
+
+`caller_complaint` is in the dynamic variable register but NOT in the universal_router capture_context allowlist.
+
+---
+
+## Tool 2 — universal_router
+
+POST /api/v1/webhook/universal_router — Synchronous. Sets `uni_router_intent` and optionally stores payload variables. Expression edges evaluate after the call completes, before any spoken output.
+
+### Intent normalisation — critical trap
+
+The request intent is not always copied verbatim to `uni_router_intent`. The webhook normalises several values internally. Always use the emitted `uni_router_intent` value in expression edge conditions, not the sent intent string.
+
+### Intent → emission table
+
+| Intent sent | uni_router_intent emitted | Key side effects |
+|---|---|---|
+| info_pivot | "info_pivot" | Stores return_node from payload if provided. No other effects. |
+| info_answered | "info_answered" | Sets info_answered="true". Clears return_node. If appointment_type_id == "none": also clears appointment_type. |
+| initialize_call | "" | Sets booking_for="". Clears return_node, reschedule_mode. |
+| confirm_service | "service_resolved" | Clears appointment_date, appointment_time, timeframe_raw, implied_service, group_or_private. If info_pivot_source in payload: also clears patient_status. Sets extended_variant_available. |
+| confirm_time | "booking_self" or "booking_other" | Routes based on booking_for. Sets appointment_date, appointment_time, practitioner_id etc. Wipes extended variant fields. |
+| route_self / booking_self | "booking_self" | Sets booking_for="" (empty = self default). |
+| route_other / booking_other | "booking_other" | Sets booking_for="other". |
+| change_time | "constraint_change" | Clears appointment_date, appointment_time, return_node. |
+| change_practitioner | "constraint_change" | Clears practitioner_id, return_node. |
+| change_service | "service_change" | Clears appointment_type_id, appointment_type, appointment_date, appointment_time, practitioner_id, timeframe_raw, implied_service, patient_status, return_node. |
+| change_location | "constraint_change" | Clears business_id, business_name, return_node. |
+| multiple_changes | "constraint_change" | Selective clearing per clear_time, clear_practitioner, clear_service, clear_location flags. |
+| reschedule_same | "reschedule_same" | Clears appointment_date, appointment_time, timeframe_raw, practitioner_id. Sets reschedule_mode="true". |
+| reschedule_different | "reschedule_different" | Clears broader fields including service. Sets reschedule_mode="true". |
+| reschedule_pending | "reschedule_pending" | **STALE — not used in active node prompts.** The 7→7b transition fires via a backward expression edge condition, not via this intent. Do not add to node prompts. |
+| reschedule_cancelled | "reschedule_cancelled" | Clears reschedule_mode unconditionally. Clears cancellation_completed. |
+| new_booking | "booking_self" or "booking_other" | Clears appointment_date, appointment_time, practitioner_id, recent_booking_id, recent_booking_phone, cancellation_completed. Does NOT reset booking_for — preserves current value so router emits correctly. |
+| abandon_booking | "abandon_booking" | Clears all in-flight booking fields including return_node and constraints. |
+| abandon_availability | "abandon_availability" | Routing-only transition. |
+| book_intent | "book_intent" | Routing-only. Node 1 → Node 2 deterministic transition. Does not set or clear any variables. |
+| cancel_intent | "cancel_intent" | Routing-only. Does not set cancellation_completed. |
+| error_unclassifiable | "error_unclassifiable" | Recovery/fallback routing. |
+| wrap_up | "wrap_up" | Prepares for Node 9 transition. |
+| retry_booking | "retry_booking_self" or "retry_booking_other" | Rewritten from booking_for before processing. |
+| capture_context | see resolution order | Synchronous variable storage; no expression edge fires. |
+| leave_message | "message_taken" | Emails clinic with caller's message + phone. No session state changes. Agent speaks response.message then fires wrap_up. |
+| callback_request | "callback_arranged" | Emails clinic with callback reason + phone. No session state changes. Agent speaks response.message then fires wrap_up. |
+| running_late | "running_late_noted" | Emails clinic that patient is running late. No session state changes. Agent speaks response.message then fires wrap_up. |
+
+`change_*` intents do not set `return_node`. `constraint_change_source` removed from variable register entirely.
+
+### Node 8 pivot and exit mechanics
+
+**Entry:** Any node detecting an informational question calls `universal_router intent="info_pivot"`. Expression edge `uni_router_intent == "info_pivot"` fires immediately to Node 8. Node 9 includes `return_node="9"` in payload. All other nodes omit `return_node`.
+
+**Exit — return to booking flow:** Node 8 calls `universal_router intent="info_answered"`. Compound expression edges route deterministically based on `appointment_date`, `appointment_type_id`, and `booking_for` already in flight. No resume_* tokens exist.
+
+**Exit — return to Node 9:** When `return_node == "9"` is in context, Node 8 YES HANDLERs call `universal_router intent="wrap_up"` instead of `intent="info_answered"`. Fires `uni_router_intent == "wrap_up"` → Node 9. Required because `info_answered` clears `return_node` before edges evaluate — an edge conditioned on `return_node == "9"` would never fire after `info_answered`. `wrap_up` is not cleared by its own response, making it a stable routing signal.
+
+**Exit — caller ends call from Node 8:** WRAP-UP escape also calls `intent="wrap_up"`, firing the same N8→N9 edge.
+
+### capture_context allowlist
+
+Only these keys are validated:
+`booking_for, practitioner_preference, timeframe_raw, preferred_gender, location, implied_service, patient_status, group_or_private, reschedule_mode, appointment_date, appointment_time, appointment_type, appointment_type_id, variant_type, working_length_type, info_pivot_source, return_node`
+
+`caller_complaint` is NOT in this allowlist.
+
+### Full dynamic variable register
+
+`uni_router_intent, last_successful_action, availability_checked, booking_completed, cancellation_completed, patient_lookup_done, reschedule_mode, booking_for, practitioner_preference, timeframe_raw, preferred_gender, implied_service, location, patient_status, group_or_private, caller_complaint, appointment_type_id, appointment_type, working_length_type, appointment_date, appointment_time, practitioner_id, business_id, business_name, variant_type, extended_variant_available, extended_appointment_type_id, extended_appointment_type, wrap_routing_flag, info_answered, return_node, recent_booking_id, recent_booking_phone, caller_first_name, caller_last_name, caller_email, patient_name_raw`
+
+Removed: `resume_3, resume_6a, resume_6b, resume_unknown, constraint_change_source`
+
+---
+
+## Tool 3 — smart_router
+
+POST /api/v1/voice-agent — Business logic layer. Handles availability, booking, cancellation, rescheduling, patient lookup, service info. On success, emits `uni_router_intent = ""` to avoid stale edges. Post-call routing handled by expression edges keyed to primary success flags.
+
+`confirm_time` and all universal_router-only intents are NOT dispatched from this endpoint.
+
+### Primary success flags
+
+| Flag | Set by |
+|---|---|
+| availability_checked: "true" | availability, check_availability, slots, find_next_available |
+| booking_completed: "true" | book, booking, appointment |
+| cancellation_completed: "true" | cancel |
+| patient_lookup_done: "true" | find_patient |
+| service_info_retrieved: "true" | get_service_info, appointment_type_info |
+
+### Availability response shape
+
+```json
+{
+  "practitioner_id": "<string>",
+  "practitioner_name": "<string>",
+  "dates": [
+    {
+      "date": "YYYY-MM-DD",
+      "day_of_week": "Monday",
+      "slot_groups": {
+        "morning": ["9:00 AM", "10:30 AM"],
+        "afternoon": ["1:00 PM", "3:00 PM"]
+      }
+    }
+  ]
+}
+```
+
+`detail="summary"` → `available_days` list, no slot data. `detail="slots"` → full `slot_groups`.
+
+---
+
+## wrap_* Intents
+
+Same endpoint as universal_router. Set `wrap_routing_flag` and perform exhaustive session state clearing. "wrap_router" in node prompts is shorthand — same tool, same endpoint.
+
+**Permitted callers:** Node 9 (all wrap_* intents) and Node 7 (wrap_cancel only).
+
+| Intent | wrap_routing_flag | booking_for | Key behaviour |
+|---|---|---|---|
+| wrap_new_unknown | "new_unknown" | "" | Full context wipe |
+| wrap_new_known | "new_known" | preserved | Preserves appointment_type_id and appointment_type only |
+| wrap_cancel | "cancel" | "" | Finalised cancellation |
+| wrap_reschedule | "cancel" | preserved | Sets reschedule_mode="true" |
+| wrap_info | "info" | "" | Information flow wrap |
+| wrap_modify | "modify" | preserved | Modification flow |
+| wrap_restart | "restart" | "" | Full context wipe |
+
+`wrap_new_known` is the only intent that preserves `appointment_type_id` and `appointment_type`. All others clear them.
+
+`booking_for` resets to `""` on: `wrap_new_unknown, wrap_cancel, wrap_info, wrap_restart`. Preserved on: `wrap_new_known, wrap_reschedule, wrap_modify`.
+
+Every wrap response clears exhaustively: all routing flags, all primary business flags, all booking constraint variables.
+
+---
+
+## Practitioner-Due Clinics (Node 2C)
+
+Some clinics route by *complaint* first rather than by service category. These clinics include Node 2C (Complaint Intake) and use a modified Node 1.
+
+### Activation
+
+Set `"practitioner_due": "<slug>"` in `clinic_agent_ids.json`. `batch_patch.py --shared` automatically applies the practitioner-due Node 1 override from `nodes/practitioner_due/<slug>/node_1_entry_greeting_router.txt` instead of the standard shared Node 1.
+
+### Folder structure
+
+```
+nodes/
+  practitioner_due/{clinic_name}/
+    node_1_entry_greeting_router.txt   # overrides shared Node 1
+    node_2c_complaint_intake.txt       # new node, clinic-specific
+    doc1_complaint_mapping.txt         # KB: complaint → practitioner mapping
+    doc2_practitioner_constraints.txt  # KB: practitioner constraints
+```
+
+Never mix practitioner-due files with booking nodes in `clinics/{clinic_name}/`.
+
+### How it differs from standard Node 1
+
+**Standard Node 1 signal 5:** SYMPTOM/CONDITION ONLY → fires `book_intent` → Node 2.
+
+**Practitioner-due Node 1 signal 5:** COMPLAINT INTAKE — fires `complaint_intake` → edge 1G → Node 2C. Triggers on:
+- Any symptom, condition, body-area pain, injury, or wellness concern
+- "Who's best for X" / "who do you recommend for X"
+
+### Node 2C behaviour
+
+Node 2C collects complaint details via KB-backed disambiguation, maps the complaint to the best-fit practitioner using `doc1_complaint_mapping.txt`, then routes to Node 2 with `implied_service` and `practitioner_preference` already populated. Node 2 proceeds normally from there.
+
+### Edge 1G
+
+```
+uni_router_intent == "complaint_intake" → Node 2C
+```
+
+This edge is only present in practitioner-due agents. Standard agents have no Node 2C and no edge 1G.
+
+---
+
+## Cancellation Flow
+
+Full path: **Node 1 → Node 7 (→ Node 7b if reschedule)**
+
+### Entry routing
+
+- Node 1 fires `cancel_intent` (with `reschedule_mode="true"` in payload if caller said "reschedule" / "move my appointment")
+- Expression edge `cancel_intent` → Node 7 (via backward condition on 7→9 edge)
+- Any other node's CANCEL ESCAPE also fires `cancel_intent` → same path
+
+### Node 7 ENTRY GATE (four mutually exclusive paths, evaluate A → C → D → B)
+
+**PATH A** — Recent booking cancel: `recent_booking_id` is set AND `recent_booking_phone` is non-empty AND caller refers to "the one I just made" / "cancel that" / "never mind". Calls smart_router directly with the stored `appointment_id` and `recent_booking_phone`. No phone collection needed.
+
+**PATH C** — Second appointment: prior cancel already completed this session AND patient_phone was confirmed AND caller refers to a different appointment. Reuses confirmed patient_phone; skips phone collection.
+
+**PATH D** — View/confirm only: caller says "check my appointment", "when is my appointment", "confirm my appointment". Calls smart_router `intent="details"` using `caller_id` as phone. Speaks message verbatim then calls `wrap_up`. Does NOT ask about cancellation.
+
+**PATH B** — Standard: everything else. Proceeds to STEP 1.
+
+### Node 7 STEP 1
+
+Calls smart_router `intent="cancel"` using `caller_id` as the lookup phone. Speaks "Checking that now, one moment" in the same response.
+
+### Handle responses
+
+| Response | Action |
+|---|---|
+| Multiple appointments found | Read list verbatim. Wait for caller to select one. Cancel selected ID only. (See RESCHEDULE MULTI-APPOINTMENT GATE below for reschedule_mode.) |
+| Policy warning (`cancellation_policy_confirmation_required`) | Read verbatim. Wait for confirmation. On confirm: re-call with `confirm_policy_override: true`. On decline: wrap_up. |
+| Not found | Offer to search under different phone. Two-attempt phone validation. |
+| Success (reschedule_mode != "true") | Speak message verbatim (PART 1) + call `universal_router intent="wrap_up"` (PART 2) in same response. |
+| Success (reschedule_mode == "true") | **RESCHEDULE WRAP PROHIBITION** — speak message verbatim ONLY. Zero tool calls. Calling any universal_router intent here clears `cancellation_completed` to "none" and permanently breaks the transition to Node 7b. |
+| Error | Speak message verbatim + call `universal_router intent="wrap_up"` in same response. |
+
+### RESCHEDULE MULTI-APPOINTMENT GATE
+
+When `reschedule_mode=="true"` AND 2+ appointments found:
+- Read list verbatim, then offer: handle one-by-one OR pass coordination request to clinic.
+- Clinic coordination: `callback_request` → wrap_up.
+- One-by-one: ask which to start with; after each successful rebook ask about remaining.
+
+### CANCELLATION SCOPE LIMIT
+
+At most one `smart_router intent="cancel"` call per response turn. Multiple-appointment cancellations always happen across separate turns.
+
+### BOOKING PROHIBITION in Node 7
+
+`intent="book"`, `intent="reschedule"`, and `intent="availability"` are absolutely forbidden. The only valid smart_router intents are `"cancel"` and `"details"`. Callers saying "reschedule" trigger the cancel flow — rebook follows in Node 7b.
+
+### MID-FLOW REBOOKING GATE
+
+If a cancel has already been called this session AND caller now wants to book: call `wrap_up`. Node 9 re-routes the new booking.
+
+---
+
+## Reschedule Flow
+
+Full path: **Node 1 → Node 7 → (auto-transition) → Node 7b → Node 3 or Node 2**
+
+### Step 1 — Entry
+
+Node 1 fires `cancel_intent` with `reschedule_mode="true"` in payload → Node 7.
+
+Node 7's RESCHEDULE ORIENTATION fires on first entry turn when `reschedule_mode=="true"`:
+- Singular: "Let's cancel your booking first, then rebook the time you'd like to reschedule for."
+- Plural (2+ practitioners or services): "Let's cancel your bookings first, then rebook the times..."
+- If caller resists ("I don't want to cancel"): explain that cancel-first is required, then proceed.
+
+### Step 2 — Cancellation
+
+Node 7 runs the standard cancel flow. On cancel success with `reschedule_mode=="true"`:
+- RESCHEDULE WRAP PROHIBITION: speak message verbatim only — absolutely zero tool calls.
+- `cancellation_completed` is set to `"true"` by the backend.
+
+### Step 3 — Auto-transition to Node 7b
+
+The backward condition on the Node 7b→Node 7 edge fires when:
+```
+cancellation_completed == "true" AND reschedule_mode == "true"
+```
+This routes from Node 7 to Node 7b without any tool call from Node 7. This is why calling universal_router after cancel success with reschedule_mode would break the flow — it clears `cancellation_completed`.
+
+### Step 4 — Node 7b (Rescheduler)
+
+Node 7b reads the cancelled appointment's service category from conversation history.
+
+Asks exactly one question: "So we're booking you in for another [category] appointment — is that right?"
+
+| Caller response | Intent fired | Destination |
+|---|---|---|
+| YES / affirmative | `reschedule_same` | Node 3 — availability search for same service |
+| NO / different service | `reschedule_different` | Node 2 — full service resolution |
+| Abandon ("no thanks", "that's all") | `wrap_up` | Node 9 |
+| Cancel intent (wants to cancel another) | `reschedule_cancelled` | Node 7 — clears `reschedule_mode` and `cancellation_completed` for a fresh cancel |
+
+### Step 5 — Rebook
+
+**reschedule_same → Node 3:** `reschedule_mode="true"` is preserved. Node 2 patient_status gate is skipped (RESCHEDULE RE-ENTRY exception: `reschedule_mode=="true"` AND `appointment_type_id=="none"` → treat as existing). After booking completes in Node 6a/6b, wrap_up routes to Node 9.
+
+**reschedule_different → Node 2:** Full service resolution runs as normal. `reschedule_mode="true"` is still set. Booking completes via Node 3 → Node 6a/6b → Node 9.
+
+### reschedule_cancelled edge
+
+`reschedule_cancelled` intent clears both `reschedule_mode` and `cancellation_completed`. The `7b-CE` edge routes back to Node 7. Node 7 then runs a fresh cancel as a standalone cancellation (reschedule_mode is now cleared — the wrap_prohibition no longer applies, so cancel success will call wrap_up normally).
+
+---
+
+## Dynamic Variables — Full Lifecycle
+
+Variables persist for the conversation lifetime. `""` clears a variable — treated as unset. Keep active variables minimal. Stale variables cause silent misbehaviour.
+
+**Exception — `"none"` sentinel:** ElevenLabs expression edges do not fire when a variable equals `""`. Three variables use `"none"` (literal string) as their cleared/unset sentinel so that edge conditions can test for the unset state: `appointment_date`, `appointment_type_id`, and `cancellation_completed`. Every backend response that clears these variables sets them to `"none"`, not `""`.
+
+### booking_for behaviour
+
+Defaults to `""` at session start and after most resets. Empty is treated as self by all nodes.
+
+**Set to "other" by:**
+- `async_capture_context` on explicit third-party language ("for my wife", "for my son", "for a friend", "not for me")
+- `universal_router intent="route_other"` or `"booking_other"`
+- `universal_router intent="confirm_time"` when `booking_for` in payload is `"other"`
+
+**Set to "self" (i.e. `""`) by:**
+- `async_capture_context` when node asked an explicit "is this for you?" and caller confirmed explicitly
+- `universal_router intent="route_self"` or `"booking_self"` (sets `booking_for=""`)
+- Node 3 BOOKING_FOR GATE: on entry after `wrap_new_known` rebook when `booking_for=="other"`, asks "Is this still for the same person, or for you?" and captures answer
+
+`booking_for` is never set to `"self"` from implicit first-person language. Empty string is the functional self state. Nodes only send `booking_for="self"` to `async_capture_context` in direct response to an explicit question.
+
+**Resets:**
+- `new_booking`: does NOT reset (preserves for correct booking_self/other routing)
+- `wrap_new_unknown, wrap_cancel, wrap_info, wrap_restart`: reset to `""`
+- `wrap_new_known, wrap_reschedule, wrap_modify`: preserved
+
+### Variable categories
+
+**Booking constraints** (accumulate during booking, cleared on reset):
+`appointment_type, appointment_type_id, timeframe_raw, appointment_date, appointment_time, practitioner_preference, preferred_gender, location, booking_for, patient_status, massage_duration`
+
+**Identity** (set once, reused for session):
+`caller_first_name, caller_last_name, caller_email`. `patient_name_raw` is short-lived staging, consumed in name collection.
+
+**Session** (set by backend tool responses):
+`session_id, recent_booking_id, recent_booking_phone`
+
+**Flow control:**
+- `return_node`: set only by `info_pivot` when Node 9 includes it. Cleared by `info_answered` and `change_service`. Not used for N8→N9 routing (that path uses `wrap_up`).
+- `reschedule_mode`: set by `reschedule_*` intents or `capture_context`. Cleared by `wrap_cancel` or `reschedule_cancelled`.
+- `wrap_routing_flag`: set by `wrap_*` intents. Drives Node 9 outgoing routing.
+
+**Routing signals** (transient, never read inside node logic for decisions):
+- `uni_router_intent`: primary routing signal.
+- `info_answered`: set to `"true"` by `info_answered` intent; cleared on every other routing response.
+
+### Variable clearing reference
+
+| Intent | What is cleared |
+|---|---|
+| confirm_service | appointment_date, appointment_time, timeframe_raw, implied_service, group_or_private; + patient_status if info_pivot_source in payload |
+| change_service | appointment_type_id, appointment_type, appointment_date, appointment_time, practitioner_id, timeframe_raw, implied_service, patient_status, return_node |
+| change_time | appointment_date, appointment_time, return_node |
+| change_practitioner | practitioner_id, return_node |
+| change_location | business_id, business_name, return_node |
+| reschedule_same | appointment_date, appointment_time, timeframe_raw, practitioner_id |
+| reschedule_different | broader — includes service fields |
+| reschedule_cancelled | reschedule_mode, cancellation_completed |
+| reschedule_pending | cancellation_completed |
+| new_booking | appointment_date, appointment_time, practitioner_id, recent_booking_id, recent_booking_phone, cancellation_completed (booking_for preserved) |
+| abandon_booking | all in-flight booking fields + return_node + constraints |
+| info_answered | return_node; appointment_type if appointment_type_id == "none" |
+| any wrap_* | exhaustive clear of all booking, routing, and flow-control variables |
+
+---
+
+## Global Framework vs Node Prompts
+
+**Framework defines** (for Override: Disabled nodes — 2 and 3): turn type rule, tool message passthrough, tool roles, clean output rule, voice style, opener rule, rephrasing, phrasing standards, scope and service rule, system variables, dynamic variables, immediate capture, universal escapes, systemic overrides.
+
+**Node prompts contain only what is unique to that node.** Never repeat framework rules locally.
+
+**Belongs in global framework:**
+- Turn type and output rules (absolute)
+- Tool roles and tool message passthrough (absolute)
+- Voice style, opener rule, rephrasing, phrasing standards
+- System variables and dynamic variable register
+- Immediate capture rule
+- Universal escape clauses
+- Systemic overrides
+
+**Does not belong anywhere in prompts:**
+- Lengthy tone philosophy — one directive line is sufficient
+- Reasoning behind rules — state what to do, not why
+- Redundant reminders — one clear statement per rule, never repeated
+
+Override: Enabled nodes must include a MINI-FRAMEWORK that is an exact mirror of the framework's universal sections. Changes to universal rules require simultaneous updates to all MINI-FRAMEWORKs.
+
+---
+
+## Immediate Capture — Universal Rule
+
+Every node scans the caller's current message before any other processing. All detected signals fire in a single `async_capture_context` call. If another tool call is already required that turn, captured values merge into that tool's payload instead.
+
+This eliminates history scanning. Variables are stored the moment they are spoken — downstream nodes read from dynamic variables, never conversation history. Node 2 reads dynamic variables directly (e.g. `{{booking_for}}`, `{{practitioner_preference}}`) in payloads.
+
+**Capturable signals:**
+- `booking_for`: explicit third-party language only → "other". First-person language leaves unset. Send "self" only in response to an explicit "is this for you?" question.
+- `practitioner_preference`: any practitioner name mentioned
+- `timeframe_raw`: any time or date reference
+- `preferred_gender`: gender preference for practitioner
+- `location`: any clinic location named
+- `implied_service`: any service or treatment named
+- `patient_status`: "first time"/"never been" → "new" | "been before"/"returning" → "existing"
+- `caller_complaint`: any symptom or condition described (async_capture_context only — never in universal_router payload)
+- `reschedule_mode`: "reschedule"/"move my appointment"/"change my appointment" → "true"
+- `group_or_private`: "a class"/"group" → "group" | "one on one"/"private" → "private"
+- `massage_duration`: any duration reference for massage appointments ("30 minutes", "an hour", "60 min") → capture the value as spoken
+
+---
+
+## Universal Escapes — Universal Rule
+
+Evaluated before node logic on every turn. Evaluate in order, stop at first match.
+
+1. **INFO PIVOT:** informational question during active flow → `universal_router intent="info_pivot"`. Include `return_node="9"` only when originating from Node 9. *Omit in Node 8.*
+
+2. **CANCEL ESCAPE:** intent to cancel existing confirmed appointment → `universal_router intent="cancel_intent"`. *Omit in Node 7. Omit in Node 1 (fires via IMMEDIATE CAPTURE blocking signal).*
+
+3. **WRAP-UP:** caller explicitly signals end of call → `universal_router intent="wrap_up"`. *Omit in Node 9 (callers ending the call handled by END_CALL GATE). Omit in Node 1 (fires via IMMEDIATE CAPTURE blocking signal).*
+
+Defined once in global framework (Nodes 2 and 3) and once in each MINI-FRAMEWORK. Not repeated in node prompts.
+
+---
+
+## Output Suppression
+
+Test: would a human receptionist say this on a phone call? Variable names, intent values, tool names, node references, IDs, routing logic, and internal reasoning are never spoken.
+
+OUTPUT VALIDATION scan: before every response, scan planned output and delete anything that fails the receptionist test. If nothing remains, output nothing.
+
+---
+
+## Positive Instruction Principle
+
+LLMs select tokens positively. "Don't do X" only marginally reduces unwanted output and is frequently ignored under latency constraints. A complete positive sequence (step 1, step 2, HALT) structurally prevents most errors.
+
+**Five reframe patterns:**
+
+| Pattern | Instead of | Use |
+|---|---|---|
+| Reframe as positive action | "Don't offer multiple times unless asked." | "Offer one time slot. If caller asks for options, provide three alternatives." |
+| Specify exact output | "Don't provide pricing unless directly asked." | "Wait for caller to ask about pricing. When asked, provide pricing and standard payment options only." |
+| Positive examples over prohibition | "Don't ramble." | "Responses: 1–2 sentences max." |
+| State rules as output constraints | "Don't include unnecessary information." | "Output only: name, date, time, confirmation." |
+| Enforce via tool constraints | Prompt: "Don't refund over $500." | Tool param: max_amount=500. System enforces; prompting cannot override. |
+
+Where a negative guard is genuinely necessary — a high-probability error the positive steps don't structurally prevent — one precise negative instruction is acceptable. Never a list.
+
+---
+
+## Edge Reference — All Nodes
+
+### Node 1 (Entry Greeting Router) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 1A | Expression | uni_router_intent == "book_intent" | Node 2 |
+| 1B | LLM | cancel, reschedule, modify, or check existing appointment | Node 7 |
+| 1C | LLM | purely informational, zero booking intent | Node 8 |
+| 1E | Expression | uni_router_intent == "wrap_up" | Node 9 |
+| 1F | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 1G | Expression | uni_router_intent == "complaint_intake" | Node 2C *(practitioner-due agents only)* |
+| (entry) | Unconditional | — | Node 1 |
+
+1A fires via universal_router intent="book_intent" — deterministic expression edge, replaces LLM edge. 1F is the preferred deterministic path for cancel_intent. 1B is fallback for callers whose language doesn't trigger IMMEDIATE CAPTURE first. 1G only exists in practitioner-due clinic agents — standard agents have no Node 2C and no edge 1G.
+
+### Node 2C (Complaint Intake) — outgoing *(practitioner-due agents only)*
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 2C-N2 | Expression | uni_router_intent == "book_intent" | Node 2 |
+| 2C-WU | Expression | uni_router_intent == "wrap_up" | Node 9 |
+
+Node 2C resolves the complaint to a practitioner recommendation using KB documents, then fires `book_intent` with `implied_service` and `practitioner_preference` populated. Node 2 handles full service/variant resolution from there. Node 2C does not book directly.
+
+**Email-action intents (leave_message, callback_request, running_late):** No dedicated edge. Node 1 fires the intent, receives the email confirmation in response.message, speaks it, then calls universal_router intent="wrap_up" in the same turn — edge 1E handles the transition. The router sends the clinic email and returns immediately; no session state is modified.
+
+Removed: LLM edge Node 3→Node 1 ("user wants to start over") — Node 3 handles via expression edges. Dangling LLM edge from deleted node `node_01kbgrqthresgtq09b6bc4baa8`.
+
+### Node 2 (Service Resolution) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 2A | Expression | uni_router_intent == "service_resolved" | Node 3 |
+| 2B | Expression | uni_router_intent == "info_pivot" | Node 8 |
+| 2C | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 2D | Expression | uni_router_intent == "wrap_up" | Node 9 |
+
+Removed: Legacy LLM edge Node 7→Node 2 (`edge_01kbgp503nfvgv43p6hdzmngs2`, "caller wants to book a new appointment"). Node 7's NEW BOOKING ESCAPE fires `universal_router intent="new_booking"` → `booking_self/other` → expression edges to N6a/N6b directly. This LLM edge was redundant, skipped variable clearing, and created a race condition.
+
+#### Node 2 prompt — patient_status gate (critical)
+
+Node 2 is responsible for capturing `patient_status` ("new" or "existing") **before** calling `confirm_service`. This must happen on every entry path, including return from Node 8 (info pivot).
+
+**PATIENT STATUS GATE — ABSOLUTE** (top of prompt, before all guards):
+If `{{patient_status}}` is not set → ask `MENU` ("Have you been to the clinic before?") or `MENU_OTHER`. HALT. No tool call, no branch, no `implied_service` matching until patient_status is confirmed.
+Exception: RESCHEDULE RE-ENTRY (`reschedule_mode=="true"` AND `appointment_type_id=="none"`) — skip gate, treat as existing.
+
+**Bug fixed (2026-04-01):** When returning from Node 8 via `info_answered`, the INFO PIVOT RETURN GUARD contained `"Skip NEW PATIENT GATE."` which caused the model to bypass the patient_status check and jump directly to `implied_service` category matching (SKIN_PEELS → variant question) without asking patient_status. Fix: removed that phrase; gate is now absolute and structurally prior to all guards.
+
+### Node 3 (Availability Handler) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 3A | Expression | uni_router_intent == "booking_self" | Node 6a |
+| 3B | Expression | uni_router_intent == "booking_other" | Node 6b |
+| 3C | Expression | uni_router_intent == "abandon_availability" | Node 9 |
+| 3D | Expression | uni_router_intent == "info_pivot" | Node 8 |
+| 3E | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 3F | Expression | uni_router_intent == "service_change" | Node 2 |
+| 3G | LLM | smart_router availability failed, retry possible | Node 11 |
+
+### Node 6a (Name Collection Self) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 6a-WU | Expression | uni_router_intent == "wrap_up" | Node 9 |
+| 6a-CA | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 6a-PC | Expression | uni_router_intent == "booking_other" | Node 6b |
+| 6a-SC | Expression | uni_router_intent == "service_change" | Node 2 |
+| 6a-CC | Expression | uni_router_intent == "constraint_change" | Node 3 |
+| 6a-IP | Expression | uni_router_intent == "info_pivot" | Node 8 |
+| 6a-BE | LLM | smart_router book failed/unrecoverable | Node 11 |
+
+### Node 6b (Name Collection Other) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 6b-WU | Expression | uni_router_intent == "wrap_up" | Node 9 |
+| 6b-CA | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 6b-PC | Expression | uni_router_intent == "booking_self" | Node 6a |
+| 6b-SC | Expression | uni_router_intent == "service_change" | Node 2 |
+| 6b-CC | Expression | uni_router_intent == "constraint_change" | Node 3 |
+| 6b-IP | Expression | uni_router_intent == "info_pivot" | Node 8 |
+| 6b-BE | LLM | smart_router book failed/unrecoverable | Node 11 |
+
+### Node 7 (Cancellation Handler) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 7-9 (forward) | Expression (OR) | (cancellation_completed=="true" AND reschedule_mode!="true") OR uni_router_intent=="wrap_up" | Node 9 |
+| 7-9 (backward from N9) | Expression (OR) | uni_router_intent=="cancel_intent" OR wrap_routing_flag=="cancel" | Node 7 ← Node 9 |
+| 7→7b (backward on 7b-CE edge) | Expression (OR) | (cancellation_completed=="true" AND reschedule_mode=="true") OR uni_router_intent=="booking_self" | Node 7b |
+| 7-BO | Expression | uni_router_intent == "booking_other" | Node 6b |
+| 7-IP | Expression | uni_router_intent == "info_pivot" | Node 8 |
+| 7-CE | LLM | smart_router cancel failed/unrecoverable | Node 11 |
+
+**Node 7→7b transition:** There is NO explicit forward edge from Node 7 to Node 7b. The transition fires automatically via the **backward condition** on the `edge_node7b_reschedule_cancelled_to_node7` edge (defined in the Node 7b file). Two OR branches:
+- Original reschedule path: `cancellation_completed=="true" AND reschedule_mode=="true"` — auto-fires after cancel success. No tool call from Node 7 needed or allowed (RESCHEDULE WRAP PROHIBITION prevents it).
+- Post-cancel new booking: `uni_router_intent=="booking_self"` — fires when caller requests a new booking after a cancel. MID-FLOW REBOOKING GATE calls `new_booking` → returns `booking_self`. Note: `booking_self` from Node 7 routes to 7b (not 6a) because `appointment_type_id` is unset in cancel-first flows (Node 2 was bypassed); 6a assumes service already resolved and would fail. 7b reads service from conversation history and asks same-or-different before routing to Node 3 or Node 2.
+
+`reschedule_pending` intent is NOT used in the active cancel/reschedule flow and should not appear in node prompts.
+
+### Node 7b (Rescheduler) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 7b-RS | Expression | uni_router_intent == "reschedule_same" | Node 3 |
+| 7b-RD | Expression | uni_router_intent == "reschedule_different" | Node 2 |
+| 7b-CE (forward) | Expression | uni_router_intent == "reschedule_cancelled" | Node 7 |
+| 7b-CE (backward from N7) | Expression (OR) | (cancellation_completed=="true" AND reschedule_mode=="true") OR uni_router_intent=="booking_self" | Node 7 → Node 7b |
+| 7b-AB | Expression | uni_router_intent == "wrap_up" | Node 9 |
+| 7b-IP (forward) | Expression | uni_router_intent == "info_pivot" | Node 8 |
+| 7b-IP (backward from N8) | Expression (AND) | uni_router_intent=="info_answered" AND reschedule_mode=="true" AND appointment_date=="none" | Node 8 → Node 7b |
+| 7b-RE | LLM | universal_router failed/unrecoverable | Node 11 |
+
+**7b-IP backward condition:** When Node 8 returns via `info_answered` and `reschedule_mode` is still active and no date is set, the compound backward condition routes back to Node 7b (not to Node 3, as the general Node 8 compound edges would route). This takes priority because the reschedule rebook question has not been answered yet.
+
+**Node 7b ENTRY behaviour:**
+- `reschedule_mode=="true"` (original reschedule path): RESCHEDULE BYPASS fires — skip confirmation question, proceed directly to ROUTE SAME (`reschedule_same` → Node 3). Caller already declared reschedule intent upfront.
+- `reschedule_mode` unset (post-cancel new booking via `booking_self`): read cancelled appointment type from conversation history, ask "So we're booking you in for another [service] — is that right?" Same → `reschedule_same` → Node 3. Different → `reschedule_different` → Node 2.
+
+Note: 7b→Node 11 LLM edge should be reviewed for removal. universal_router failures are extremely rare and Node 11 cannot retry universal_router calls. If retained, condition should be tightened.
+
+### Node 8 (Information Handler) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 8-N2 | Expression (AND) | uni_router_intent=="info_answered" AND appointment_type_id=="none" | Node 2 |
+| 8-N3 | Expression (AND) | uni_router_intent=="info_answered" AND appointment_type_id!="none" AND appointment_date=="none" | Node 3 |
+| 8-N6a | Expression (AND) | uni_router_intent=="info_answered" AND appointment_date!="none" AND booking_for!="other" | Node 6a |
+| 8-N6b | Expression (AND) | uni_router_intent=="info_answered" AND appointment_date!="none" AND booking_for=="other" | Node 6b |
+| 8-N9 | Expression | uni_router_intent == "wrap_up" | Node 9 |
+| 8-CI | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 8-CF | LLM | info answered AND caller explicitly done, zero booking intent | Node 9 |
+
+Old edge "info_answered AND return_node=='9'" replaced by "wrap_up". The old edge was permanently unreachable — `info_answered` clears `return_node` before edges evaluate.
+
+### Node 9 (Wrap Up) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 9A | Expression | wrap_routing_flag == "new_unknown" | Node 2 |
+| 9B | Expression | wrap_routing_flag == "new_known" | Node 3 |
+| 9D | Expression | wrap_routing_flag == "restart" | Node 1 |
+| 9E | Expression | wrap_routing_flag == "modify" | Node 3 |
+| 9-CI | Expression | uni_router_intent == "cancel_intent" | Node 7 |
+| 9-IP | Expression | uni_router_intent == "info_pivot" | Node 8 |
+
+`wrap_cancel→N7`, `wrap_reschedule→N7(→N7b)`, `wrap_info→N8` route via backward conditions on destination node edges, not via outgoing expression edges from N9. `wrap_*` intents set `wrap_routing_flag` which destination nodes' backward conditions read.
+
+### Node 11 (Error Recovery) — outgoing
+
+| Edge | Type | Condition | Destination |
+|---|---|---|---|
+| 11A | Expression | uni_router_intent == "abandon_booking" | Node 2 |
+| 11F | Expression | uni_router_intent == "wrap_up" | Node 9 |
+| 11B | LLM (backward) | smart_router availability failed, retry possible | Node 3 |
+| 11E | LLM (backward) | smart_router cancel failed, retry possible | Node 7 |
+
+---
+
+## Prompt Authoring Checklist
+
+### Global framework
+- [ ] Turn type and output rules defined (absolute)
+- [ ] Tool roles: one sentence each
+- [ ] Voice style, opener, rephrasing directives
+- [ ] System variables listed
+- [ ] Dynamic variable register listed
+- [ ] Immediate capture rule included
+- [ ] Universal escapes included with node exceptions noted
+- [ ] Systemic overrides included
+- [ ] No behavioural narratives, explanations, or redundant reminders
+
+### Per node prompt
+- [ ] Clarifies complex multi-condition logic specific to this node? Include.
+- [ ] Prevents a known failure mode not covered by universal rules? Include.
+- [ ] Repeats framework or MINI-FRAMEWORK rules? Remove.
+- [ ] Explains reasoning rather than stating action? Remove.
+- [ ] Sets aspirational tone? Remove.
+- [ ] Reads dynamic variables directly (e.g. `{{booking_for}}`) rather than scanning conversation history? Confirm.
+
+### MINI-FRAMEWORK (Override: Enabled nodes)
+- [ ] Turn type rule
+- [ ] Tool message passthrough
+- [ ] Tool roles
+- [ ] Clean output / output validation
+- [ ] Voice style and opener
+- [ ] System variables
+- [ ] Immediate capture rule (all nodes including Node 11)
+- [ ] Correct blocking signals for this node (per Universal Escapes exceptions)
+- [ ] booking_for in NON-BLOCKING signals with correct positive directive
+- [ ] Node-specific additions only (phone format for 6a/6b/7, scope lock for 8, explicit confirmation for 7)
+- [ ] BARGE-IN rule
+- [ ] SECURITY rule (positive directive + 3-attempt escalation to wrap_up)
+- [ ] Mirrors framework universal sections exactly
+
+### Preventing unwanted behaviours
+- [ ] All "don't" instructions reframed as positive directives
+- [ ] Exact desired output specified
+- [ ] Critical rules enforced via tool constraints where possible
+- [ ] Compliance tested on real conversations
