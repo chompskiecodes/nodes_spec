@@ -12,7 +12,7 @@ Graph-based phone agent handling bookings, cancellations, rescheduling, and enqu
 
 | Node | Label | LLM | Override | Role |
 |---|---|---|---|---|
-| 1 | Entry Greeting Router | gemini-2.5-flash | Enabled | Classifies initial intent, fires async context capture, silent router |
+| 1 | Entry Greeting Router | gemini-2.5-flash | Enabled | Classifies initial intent, merges context into universal_router payload, silent router |
 | 2 | Service Resolution | claude-haiku-4-5 | Disabled | Resolves appointment type and patient status |
 | 2C | Complaint Intake | claude-haiku-4-5 | Enabled | Collects symptom details, maps complaint to practitioner (practitioner-due clinics only) |
 | 3 | Availability Handler | claude-haiku-4-5 | Disabled | Searches availability, confirms time slot |
@@ -218,42 +218,19 @@ Handles two paths: (1) YES HANDLERs where `return_node` was `"9"` — these call
 
 | Condition | Tool |
 |---|---|
-| Caller volunteers a preference; nothing else this turn depends on it | async_capture_context |
+| Context detected alongside a blocking signal this turn | merge values into that universal_router call's payload |
+| Context detected with no blocking signal this turn | universal_router with intent="capture_context" |
 | Need to fire a specific expression edge | universal_router with matching intent |
-| Need to store variables synchronously without firing an edge | universal_router with intent="capture_context" |
 | Session-clearing wrap-up routing (Node 9, or Node 7 for wrap_cancel) | universal_router with wrap_* intent |
 | Business logic (availability, booking, cancel, patient lookup, service info) | smart_router (POST /api/v1/voice-agent) |
 
-After calling `universal_router` (any intent): HALT immediately. `async_capture_context` and `smart_router` do not require HALT.
+After calling `universal_router` (any intent): HALT immediately. `smart_router` does not require HALT.
 
 Node prompts use "wrap_router" as shorthand for "call universal_router with a wrap_* intent." No separate endpoint — wrap_* intents go to universal_router (POST /api/v1/webhook/universal_router).
 
 ---
 
-## Tool 1 — async_capture_context
-
-POST /api/v1/async-capture-context — Fire-and-forget. No intent field. Conversation does not block on response. Returns `success: true` and echoes validated keys as dynamic variables. If `session_id` present, validated keys merge into `resolved_context` via non-blocking `update_session`.
-
-**Capturable fields:**
-
-| Key | Allowed values | Notes |
-|---|---|---|
-| booking_for | "self", "other" | "other" on explicit third-party language. "self" only when node asked an explicit "is this for you?" and caller confirms. Never send "self" on implicit first-person language — empty is the default self state. |
-| practitioner_preference | any non-empty string | |
-| timeframe_raw | any non-empty string | |
-| preferred_gender | "male", "female" | |
-| implied_service | any non-empty string | |
-| location | any non-empty string | |
-| patient_status | "new", "existing" | |
-| group_or_private | "group", "private" | |
-| reschedule_mode | "true" only | |
-| caller_complaint | any non-empty string | Exclusively via this tool — not via universal_router capture_context |
-
-`caller_complaint` is in the dynamic variable register but NOT in the universal_router capture_context allowlist.
-
----
-
-## Tool 2 — universal_router
+## Tool 1 — universal_router
 
 POST /api/v1/webhook/universal_router — Synchronous. Sets `uni_router_intent` and optionally stores payload variables. Expression edges evaluate after the call completes, before any spoken output.
 
@@ -311,7 +288,7 @@ The request intent is not always copied verbatim to `uni_router_intent`. The web
 Only these keys are validated:
 `booking_for, practitioner_preference, timeframe_raw, preferred_gender, location, implied_service, patient_status, group_or_private, reschedule_mode, appointment_date, appointment_time, appointment_type, appointment_type_id, variant_type, working_length_type, info_pivot_source, return_node`
 
-`caller_complaint` is NOT in this allowlist.
+`caller_complaint` is NOT in this allowlist — it can only be sent via blocking signal payloads (book_intent, cancel_intent, complaint_intake).
 
 ### Full dynamic variable register
 
@@ -321,7 +298,7 @@ Removed: `resume_3, resume_6a, resume_6b, resume_unknown, constraint_change_sour
 
 ---
 
-## Tool 3 — smart_router
+## Tool 2 — smart_router
 
 POST /api/v1/voice-agent — Business logic layer. Handles availability, booking, cancellation, rescheduling, patient lookup, service info. On success, emits `uni_router_intent = ""` to avoid stale edges. Post-call routing handled by expression edges keyed to primary success flags.
 
@@ -546,16 +523,16 @@ Variables persist for the conversation lifetime. `""` clears a variable — trea
 Defaults to `""` at session start and after most resets. Empty is treated as self by all nodes.
 
 **Set to "other" by:**
-- `async_capture_context` on explicit third-party language ("for my wife", "for my son", "for a friend", "not for me")
+- `universal_router` payload merge on explicit third-party language ("for my wife", "for my son", "for a friend", "not for me")
 - `universal_router intent="route_other"` or `"booking_other"`
 - `universal_router intent="confirm_time"` when `booking_for` in payload is `"other"`
 
 **Set to "self" (i.e. `""`) by:**
-- `async_capture_context` when node asked an explicit "is this for you?" and caller confirmed explicitly
+- `universal_router` payload merge when node asked an explicit "is this for you?" and caller confirmed explicitly
 - `universal_router intent="route_self"` or `"booking_self"` (sets `booking_for=""`)
 - Node 3 BOOKING_FOR GATE: on entry after `wrap_new_known` rebook when `booking_for=="other"`, asks "Is this still for the same person, or for you?" and captures answer
 
-`booking_for` is never set to `"self"` from implicit first-person language. Empty string is the functional self state. Nodes only send `booking_for="self"` to `async_capture_context` in direct response to an explicit question.
+`booking_for` is never set to `"self"` from implicit first-person language. Empty string is the functional self state. Nodes only send `booking_for="self"` via universal_router payload in direct response to an explicit question.
 
 **Resets:**
 - `new_booking`: does NOT reset (preserves for correct booking_self/other routing)
@@ -628,7 +605,7 @@ Override: Enabled nodes must include a MINI-FRAMEWORK that is an exact mirror of
 
 ## Immediate Capture — Universal Rule
 
-Every node scans the caller's current message before any other processing. All detected signals fire in a single `async_capture_context` call. If another tool call is already required that turn, captured values merge into that tool's payload instead.
+Every node scans the caller's current message before any other processing. If a blocking signal fires this turn, all detected context values merge into that universal_router call's payload. If no blocking signal fires, call `universal_router intent="capture_context"` with the detected values.
 
 This eliminates history scanning. Variables are stored the moment they are spoken — downstream nodes read from dynamic variables, never conversation history. Node 2 reads dynamic variables directly (e.g. `{{booking_for}}`, `{{practitioner_preference}}`) in payloads.
 
@@ -640,7 +617,7 @@ This eliminates history scanning. Variables are stored the moment they are spoke
 - `location`: any clinic location named
 - `implied_service`: any service or treatment named
 - `patient_status`: "first time"/"never been" → "new" | "been before"/"returning" → "existing"
-- `caller_complaint`: any symptom or condition described (async_capture_context only — never in universal_router payload)
+- `caller_complaint`: any symptom or condition described — only via blocking signal payloads (book_intent, cancel_intent, complaint_intake); NOT sendable via capture_context
 - `reschedule_mode`: "reschedule"/"move my appointment"/"change my appointment" → "true"
 - `group_or_private`: "a class"/"group" → "group" | "one on one"/"private" → "private"
 - `massage_duration`: any duration reference for massage appointments ("30 minutes", "an hour", "60 min") → capture the value as spoken
