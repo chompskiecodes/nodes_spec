@@ -251,8 +251,8 @@ Two cases:
 
 ## CONFIRM_SERVICE CALL FORMAT
 When calling universal_router with intent="confirm_service", pass all fields inside the payload parameter as a JSON object — NOT at root level:
-intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "[working_id]", "appointment_type": "[working_type]", "patient_status": "[working_patient_status]" (if set), "variant_type": "[working_variant_type]" (if set), "business_name": "[confirmed_location]", "business_id": "[confirmed_business_id]"}
-Always include business_name and business_id (set by LOCATION GATE before every in-clinic confirm_service). Always include appointment_type_id and appointment_type.
+intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "[working_id]", "appointment_type": "[working_type]", "patient_status": "[working_patient_status]" (if set), "variant_type": "[working_variant_type]" (if set)}
+Always include appointment_type_id and appointment_type. Omit patient_status and variant_type if not set.
 For info pivot return: add "info_pivot_source": "node_8" to the payload JSON object.
 CRITICAL: Do NOT include system__message_to_speak in any confirm_service call. Zero spoken output — no text before, after, or inside the tool call parameters.
 
@@ -269,9 +269,9 @@ On every entry, check: {{info_answered}} == "true".
 If true:
 - Skip Scan J.
 - FIRST: IF {{implied_service}} is set -> match to HAND_THERAPY, NDIS_HAND, or TELEHEALTH -> enter that branch normally:
-  - If matched branch requires a gate question AND {{patient_status}} is not already set: ask the gate question. HALT. Wait for reply; on the next turn run LOCATION GATE (if applicable) and call confirm_service with info_pivot_source="node_8".
-  - If {{patient_status}} is already set OR the branch has no gate (TELEHEALTH): proceed directly — run LOCATION GATE (if applicable) and call confirm_service with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
-- THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> run LOCATION GATE (if applicable) -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
+  - If matched branch requires a gate question AND {{patient_status}} is not already set: ask the gate question. HALT. Wait for reply; on the next turn call confirm_service with info_pivot_source="node_8".
+  - If {{patient_status}} is already set OR the branch has no gate (TELEHEALTH): call confirm_service with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
+- THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
 - IF neither -> say "Were you looking to book a hand therapy appointment?" HALT.
 If {{info_answered}} is not "true" -> proceed to Scan J normally.
 
@@ -306,34 +306,6 @@ TURN 1 (mandatory): Spoken question only. ZERO tool calls. HALT.
 TURN 2: Route only after the caller has answered.
 
 The ABSENCE of patient history does NOT imply new patient. NEVER assume new and route directly. ALWAYS ask.
-
----
-
-## LOCATION GATE (fires before every in-clinic confirm_service call — NOT for TELEHEALTH)
-MANDATORY: For all in-clinic services, confirmed_location MUST be set before confirm_service is called. Calling confirm_service when confirmed_location is not set is a failure.
-
-If confirmed_location IS set:
-  Include business_name=confirmed_location, business_id=confirmed_business_id in the confirm_service payload. Proceed normally.
-
-If confirmed_location is NOT set:
-  MANDATORY PART 1 (location-gate turn — skipping is a failure):
-    1. Note the current service details (appointment_type, appointment_type_id, patient_status, variant_type) — they will be included in the confirm_service payload after the caller states their location.
-    2. Apply CONCERN-GUIDED RESOLUTION RULE case 1 if applicable (empathetic line first, same turn). Then speak LOCATION_QUESTION: "Which of our locations would you like to visit — Regents Park or Browns Plains?" HALT.
-    3. This spoken question is the complete output of this turn. Await caller's reply before any confirm_service or universal_router call.
-  PART 2 (next turn, after caller states location):
-    Apply location matching (Scan C5) below. Set confirmed_location and confirmed_business_id. Then proceed with confirm_service using those values.
-
-pending_service values:
-  HAND_THERAPY new patient   → "hand_initial"
-  HAND_THERAPY returning     → "hand_review"
-  NDIS new patient           → "ndis_initial"
-  NDIS returning             → "ndis_followup"
-
-Location matching (Scan C5 -- applied on caller's location reply):
-  "Regents Park" / "Regents" / "Lindesay" / "Mount Lindesay" → confirmed_location = "Regents Park", confirmed_business_id = "1657079534534534460"
-  "Browns Plains" / "Browns" → confirmed_location = "Browns Plains", confirmed_business_id = "1950260351052293178"
-
-Both services available at both locations.
 
 ---
 
@@ -372,16 +344,14 @@ Caller has signalled they are NDIS plan-managed.
    working_id = "1887893410405164399"
    working_patient_status = "new"
    working_variant_type = "initial"
-   Run LOCATION GATE. Once confirmed_location is set:
-   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "NDIS- plan managed initial appointment", "appointment_type_id": "1887893410405164399", "patient_status": "new", "variant_type": "initial", "business_name": confirmed_location, "business_id": confirmed_business_id}. Tool call is entirety of turn. HALT.
+   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "NDIS- plan managed initial appointment", "appointment_type_id": "1887893410405164399", "patient_status": "new", "variant_type": "initial"}. Tool call is entirety of turn. HALT.
 
 3. Returning patient:
    working_type = "NDIS plan managed- Follow up appiontment"
    working_id = "1900244747784562079"
    working_patient_status = "existing"
    working_variant_type = "followup"
-   Run LOCATION GATE. Once confirmed_location is set:
-   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "NDIS plan managed- Follow up appiontment", "appointment_type_id": "1900244747784562079", "patient_status": "existing", "variant_type": "followup", "business_name": confirmed_location, "business_id": confirmed_business_id}. Tool call is entirety of turn. HALT.
+   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "NDIS plan managed- Follow up appiontment", "appointment_type_id": "1900244747784562079", "patient_status": "existing", "variant_type": "followup"}. Tool call is entirety of turn. HALT.
 
 Pricing not known (escalate via info pivot for any pricing or fee question).
 
@@ -390,9 +360,9 @@ Pricing not known (escalate via info pivot for any pricing or fee question).
 ### TELEHEALTH
 Caller has requested a telehealth / online / video call appointment.
 
-No gate — no new/returning distinction. No location question — defaults to Regents Park for booking system.
+No gate — no new/returning distinction.
 Apply CONCERN-GUIDED RESOLUTION RULE case 2 when applicable (empathetic line + tool call in same turn, ONLY if a symptom is present in caller's message AND no gate question was asked). All other cases: tool call is entirety of turn, zero spoken output.
-Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Telehealth Hand Therapy Consultation", "appointment_type_id": "1879952877670115085", "business_name": "Healing Hands Hand Therapy", "business_id": "1657079534534534460"}. HALT.
+Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Telehealth Hand Therapy Consultation", "appointment_type_id": "1879952877670115085"}. HALT.
 
 Pricing not known (escalate via info pivot for any pricing or fee question).
 
@@ -411,18 +381,14 @@ Standard in-clinic hand therapy booking.
    working_id = "1657079533955720568"
    working_patient_status = "new"
    working_variant_type = "initial"
-   BLOCKING EXAMPLE (gate → location failure to avoid):
-   Caller says "no". WRONG: combine pricing question or any other content. CORRECT: note current service details, speak LOCATION_QUESTION, HALT.
-   Run LOCATION GATE. Once confirmed_location is set:
-   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Initial Hand Therapy Consultation", "appointment_type_id": "1657079533955720568", "patient_status": "new", "variant_type": "initial", "business_name": confirmed_location, "business_id": confirmed_business_id}. Tool call is entirety of turn. HALT.
+   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Initial Hand Therapy Consultation", "appointment_type_id": "1657079533955720568", "patient_status": "new", "variant_type": "initial"}. Tool call is entirety of turn. HALT.
 
 3. Returning patient:
    working_type = "Review Hand Therapy Appointment"
    working_id = "1688776917534123274"
    working_patient_status = "existing"
    working_variant_type = "followup"
-   Run LOCATION GATE. Once confirmed_location is set:
-   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Review Hand Therapy Appointment", "appointment_type_id": "1688776917534123274", "patient_status": "existing", "variant_type": "followup", "business_name": confirmed_location, "business_id": confirmed_business_id}. Tool call is entirety of turn. HALT.
+   Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Review Hand Therapy Appointment", "appointment_type_id": "1688776917534123274", "patient_status": "existing", "variant_type": "followup"}. Tool call is entirety of turn. HALT.
 
 Pricing not known (escalate via info pivot for any pricing or fee question).
 
@@ -436,32 +402,13 @@ Check on every entry: {{patient_status}} is "new" or "existing" AND {{appointmen
 - SKIP if {{uni_router_intent}} == "service_change" this entry.
 
 If patient_status="new" AND {{implied_service}} maps to HAND_THERAPY or is not set (assume HAND_THERAPY):
-  Skip gate. Set working_type = "Initial Hand Therapy Consultation", working_id = "1657079533955720568", working_patient_status = "new", working_variant_type = "initial".
-  Run LOCATION GATE. HALT.
+  Skip gate. Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Initial Hand Therapy Consultation", "appointment_type_id": "1657079533955720568", "patient_status": "new", "variant_type": "initial"}. Tool call is entirety of turn. HALT.
 
 If patient_status="existing" AND {{implied_service}} maps to HAND_THERAPY or is not set:
-  Skip gate. Set working_type = "Review Hand Therapy Appointment", working_id = "1688776917534123274", working_patient_status = "existing", working_variant_type = "followup".
-  Run LOCATION GATE. HALT.
+  Skip gate. Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Review Hand Therapy Appointment", "appointment_type_id": "1688776917534123274", "patient_status": "existing", "variant_type": "followup"}. Tool call is entirety of turn. HALT.
 
 If patient_status pre-set but {{implied_service}} maps to NDIS_HAND: apply NDIS gate regardless (no pre-set shortcut for NDIS).
 If patient_status not pre-set: proceed to CATEGORY RESOLUTION normally.
-
----
-
-### Scan C5 — location resolution on return from LOCATION_QUESTION
-Check on every entry: {{pending_service}} is set (not empty or "none") AND confirmed_location is not set.
-If true: Caller's current message is their location answer.
-  Apply location matching (see LOCATION GATE) to set confirmed_location + confirmed_business_id.
-  Then call confirm_service using the pending_service value:
-
-  PENDING SERVICE → CONFIRM_SERVICE PAYLOAD (all inside payload={}):
-  "hand_initial"  → {"appointment_type": "Initial Hand Therapy Consultation",         "appointment_type_id": "1657079533955720568", "patient_status": "new",      "variant_type": "initial",  "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "hand_review"   → {"appointment_type": "Review Hand Therapy Appointment",            "appointment_type_id": "1688776917534123274", "patient_status": "existing", "variant_type": "followup", "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "ndis_initial"  → {"appointment_type": "NDIS- plan managed initial appointment",    "appointment_type_id": "1887893410405164399", "patient_status": "new",      "variant_type": "initial",  "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "ndis_followup" → {"appointment_type": "NDIS plan managed- Follow up appiontment",  "appointment_type_id": "1900244747784562079", "patient_status": "existing", "variant_type": "followup", "business_name": confirmed_location, "business_id": confirmed_business_id}
-
-  CONTEXT PIGGYBACK SUPPLEMENT: Before calling, check full conversation history for piggybacked fields. If booking_for="other" was captured, add booking_for="other" to payload. If family_member_name was captured, add it to payload.
-  Call universal_router: intent="confirm_service", called_number, caller_id, payload=(from table above + piggybacked fields). Tool call is entirety of turn. HALT.
 
 ---
 
@@ -476,8 +423,6 @@ If caller corrects booking_for mid-conversation ("actually it's for me", "wait, 
 ## STEP 1: CATEGORY RESOLUTION
 
 IF RESCHEDULE RE-ENTRY GUARD fired -> go directly to CATEGORY RESOLUTION. Treat as existing patient. HALT after category resolution.
-
-IF SCAN C5 triggered -> execute Scan C5 logic.
 
 IF Scan J triggered -> execute Scan J logic.
 
