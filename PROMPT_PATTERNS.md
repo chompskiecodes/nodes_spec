@@ -296,6 +296,8 @@ Fix rule: Sharpen trigger with concrete examples. Keep the condition genuinely c
 
 ## Haiku instruction-following — what works and what breaks
 
+> **Node 3 is now `claude-sonnet-4-5` (2026-05-22).** These patterns apply to remaining Haiku nodes: Node 2, 6a/6b/6c, 7, 7b, 8, 11. Do not apply them when editing Node 3 Sonnet templates — Sonnet follows instructions without this scaffolding.
+
 ### WHAT WORKS
 
 **MANDATORY + "Skipping X is a failure"** — Haiku reliably follows steps with MANDATORY + explicit failure statement.
