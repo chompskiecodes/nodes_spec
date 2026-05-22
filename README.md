@@ -24,7 +24,7 @@ Every clinic agent uses these same node IDs:
 |------|-----|-----------|
 | 1 (entry router) | `claude-haiku-4-5` | Consistent HALT/instruction-following with other nodes |
 | 2 (service resolution) | `claude-haiku-4-5` | HALT-critical; gpt-4.1-mini fails |
-| 3 (availability) | `claude-haiku-4-5` | Complex multi-step |
+| 3 (availability) | `claude-sonnet-4-5` | All clinics; P1/P2/P3 templates in `node3_templates/`; Haiku hallucinated slot times |
 | 6a/6b/6c (name collect) | `claude-haiku-4-5` | |
 | 7 (cancellation) | `claude-haiku-4-5` | |
 | 7b (rescheduler) | `gemini-2.5-flash` | Simpler flow |
