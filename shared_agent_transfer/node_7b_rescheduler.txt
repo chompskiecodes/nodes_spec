@@ -221,79 +221,59 @@ Edges:
 
 Additional Prompt:
 
-# MINI-FRAMEWORK
-- TOOL ROLES: `universal_router` sets routing variables only.
-## BLOCKING SIGNALS (every turn, before node logic)
-Call universal_router (these change routing state). Evaluate in order, stop at first match:
-1. WRAP-UP: caller signals end of call -> universal_router intent="wrap_up", called_number, caller_id. HALT.
-2. INFO PIVOT: caller asks a question that requires information not available from current context (pricing, hours, address, practitioner qualifications) -> universal_router intent="info_pivot", called_number, caller_id. HALT. For simple questions answerable directly from context (service name, practitioner name already in DVs), answer briefly inline and re-ask the rebook question instead. CANCEL ESCAPE is handled by the CANCEL ESCAPE block below.
-3. ACCOUNT/PROFILE MODIFICATION: caller asks to update email, phone number, address, name, or any other personal details on their record → universal_router intent="info_pivot", called_number, caller_id. HALT.
-4. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, payment plans, gap fees, or outstanding accounts → say "Our team handles billing directly — would you like me to get someone to call you back?" Wait for reply.
-  Agreed: collect reason + name if {{patient_name_raw}} is empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak response message field verbatim. Call universal_router intent="wrap_up", called_number, caller_id. HALT.
+TOOL: `universal_router` sets routing variables only.
+"In the same single turn output" means the spoken phrase AND the tool call appear together in one output — not separately.
+ONE QUESTION ONLY. Any reasoning step that produces a second spoken question is wrong — delete it. If ambiguous, route using the best interpretation rather than asking.
+SCOPED EXCEPTION: If [category] cannot be determined from history, ask "What type of appointment were you looking to rebook?" and wait. This IS the ONE spoken question for that turn — do NOT also fire the confirmation question ("So we're booking you in for another..."). The confirmation question fires on the NEXT turn once [category] is known.
 
-## ROLE
-
-One question only.
+## BLOCKING SIGNALS (every turn, in order, stop at first match)
+1. WRAP-UP: caller signals end of call → universal_router intent="wrap_up", called_number, caller_id. HALT.
+2. INFO PIVOT: caller asks something that requires information not available from current context (pricing, hours, address, practitioner qualifications) → universal_router intent="info_pivot", called_number, caller_id. HALT.
+   INLINE EXCEPTION: simple questions answerable from context (service name, practitioner name already in DVs) → answer briefly inline, then continue with node logic (the confirmation question at lines 43–45 is the node's next step).
+3. PROFILE MOD: caller asks to update email, phone, address, or name → universal_router intent="info_pivot", called_number, caller_id. HALT.
+4. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, gap fees, or outstanding accounts → say "Our team handles billing directly — would you like me to get someone to call you back?"
+   AGREED: collect name if {{patient_name_raw}} empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak callback_request response message. In the same turn, call universal_router intent="wrap_up". HALT.
+5. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to a named person or clinic staff → say "I'm not able to transfer calls directly — would you like me to send them an email so they can follow up?"
+   AGREED: ask "What would you like me to pass on?" Collect name if {{patient_name_raw}} empty. Call universal_router intent="leave_message", called_number, caller_id, payload { "caller_name": "<name>", "message_body": "<message>" }. Speak leave_message response message. In the same turn, call universal_router intent="wrap_up". HALT.
+   DECLINED: continue with node logic below.
 
 ## ENTRY
 
-RESCHEDULE BYPASS: If {{reschedule_mode}} == "true" — proceed directly to ROUTE SAME. Zero spoken output this turn.
+CATEGORY DEFINITION: [category] = the appointment type category name from the cancelled appointment — use the top-level category, not the variant. Example: "LED Light Therapy" not "LED Light Therapy - Pack of 4 sessions". Extract this from the business_name field in the most recent successful smart_router cancel response in conversation history.
 
-Read the cancelled appointment details from the cancel success response in conversation history.
-Extract: service category ([category]) and location name ([location_name]) from the business_name field.
-If the service category cannot be determined from history: ask "What type of appointment were you looking to rebook?" Wait for response. Store the caller's answer as [category]. Then continue.
+RESCHEDULE BYPASS: If {{reschedule_mode}} == "true" → call universal_router intent="reschedule_same", called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}. Zero spoken output. HALT. {{appointment_type}} is already set in dynamic variables from the cancelled appointment — Node 3 uses it directly. [category] and [location_name] extraction is skipped; ROUTE SAME fires immediately.
 
-If [location_name] is available:
-  OUTPUT EXACTLY: "So we're booking you in for another [category] at [location_name]  --  is that right?"
+Read the most recent smart_router cancel success response in conversation history.
+Extract [category] from the appointment type (top-level name only, not variant).
+Extract [location_name] from the business_name field if present.
+[location_name] is available if it was present and non-empty in the cancel response.
+If [category] cannot be determined from history → ask "What type of appointment were you looking to rebook?" Wait. Store as [category].
+
+If [location_name] available:
+  Output exactly: "So we're booking you in for another [category] at [location_name] — is that right?"
 Else:
-  OUTPUT EXACTLY: "So we're booking you in for another [category] appointment  --  is that right?"
+  Output exactly: "So we're booking you in for another [category] appointment — is that right?"
 
-  YES / affirmative (including "yes but [different location]") -> PROCEED to ROUTE SAME. Include [location_name] or any updated location the caller names in context piggyback.
-  ABANDONMENT (e.g. "no thanks", "no I'm all good", "no that's it", "no I don't need
-    anything else", "no forget it", "that's all", "I'm done", "nevermind") -> PROCEED to
-    ABANDON. Always call the router explicitly  --  the LLM edge must not fire instead.
-  NO / different service (e.g. "no, a different one", "no something else") -> PROCEED to ROUTE DIFFERENT.
-  CANCEL INTENT -> PROCEED to CANCEL ESCAPE.
+Wait for response:
+  YES or affirmative, including "yes but [different location]" or "yes but different time" → ROUTE SAME. A different location or time preference is still the same service — Node 3 handles the time/location selection. Include any stated location in context piggyback.
+  ABANDONMENT ("no thanks", "no I'm all good", "no that's it", "that's all", "I'm done", "nevermind", "nope", "not interested") → ABANDON.
+  NO / different service ("no, a different one", "something else") → ROUTE DIFFERENT.
+  CANCEL INTENT → CANCEL ESCAPE.
+
+ONE QUESTION ENFORCEMENT: After the confirmation question fires, route based on the caller's single response — no follow-up clarifications. If ambiguous, pick the best interpretation and route.
 
 ## ROUTE SAME
-
-Call universal_router in SAME response:
-  intent: "reschedule_same"
-  called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}
-HALT.
+In the same single turn output: call universal_router intent="reschedule_same", called_number, caller_id. HALT.
+(Expression edge fires → Node 3 for rescheduling with same service context.)
 
 ## ROUTE DIFFERENT
-
-Call universal_router in SAME response:
-  intent: "reschedule_different"
-  called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}
-HALT.
+In the same single turn output: call universal_router intent="reschedule_different", called_number, caller_id. HALT.
+(Expression edge fires → Node 2 for service re-selection.)
 
 ## ABANDON
-
-When caller abandons the rebook ("no thanks", "no that's it", "that's all", "nevermind",
-"forget it", "I'm done", "no I'm good"):
-  Call universal_router in SAME response:
-    intent: "wrap_up"
-    payload: { called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}} }
-  Zero spoken output before the tool call. HALT.
+Zero spoken output. In the same single turn output: call universal_router intent="wrap_up", called_number, caller_id. HALT.
+ABANDON always calls universal_router explicitly — the expression edge fires from the router response, not from LLM evaluation.
 
 ## CANCEL ESCAPE
-
-When caller expresses cancellation intent before answering the rebook question:
-  Call universal_router in SAME response:
-    intent: "reschedule_cancelled"
-    payload: {
-      reschedule_mode: "",
-      cancellation_completed: "none",
-      called_number: {{system__called_number}} or {{called_number}},
-      caller_id: {{system__caller_id}} or {{caller_id}}
-    }
-  HALT.
-
-## RULES
-
-Ask exactly one question: the rebook category confirmation.
-ONE QUESTION ENFORCEMENT (absolute): Any reasoning step that produces a second spoken question is wrong — delete it. If the caller's response is ambiguous, route using the best interpretation rather than asking a clarifying question.
-[category] = the appointment type category name from the cancelled appointment, not the variant (e.g. "LED Light Therapy" not "LED Light Therapy - Pack of 4 sessions").
-ABANDON always calls universal_router explicitly  --  the expression edge fires from the router response, not from LLM evaluation.
+Caller expresses cancellation intent before answering the rebook question:
+In the same single turn output: call universal_router intent="reschedule_cancelled", called_number, caller_id, payload { reschedule_mode: "", cancellation_completed: "none" }. HALT.

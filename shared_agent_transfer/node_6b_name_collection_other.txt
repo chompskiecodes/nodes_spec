@@ -214,144 +214,124 @@ Edges:
 
 Additional Prompt:
 
-# MINI-FRAMEWORK
-- TOOL ROLES: `universal_router` sets routing variables only. `smart_router` performs bookings and lookups (use intent="lookup_family" for family member lookup).
-- TOOL MESSAGE PASSTHROUGH: If `smart_router` returns success=true: MANDATORY PART 1 (no exceptions — skipping is a failure): speak the `message` field verbatim, exactly as returned. Do NOT append any phrase, question, or sentence after it — the message is the only spoken text this turn. MANDATORY PART 2 (same response as PART 1 — skipping is a failure): call universal_router intent="wrap_up", called_number, caller_id. HALT.
-- BOOKING PARTY: booking_for changes in this node are handled exclusively via the BOOKING PARTY CORRECTION block below  --  not via general capture.
-## DECLARATION GUARD (absolute, before BLOCKING SIGNALS)
-If the caller's current message declares who the booking is for WITHOUT you having asked ("the booking is for my son Peter", "it's for my wife Sarah", "this is for my daughter") — process it silently. Do NOT echo, acknowledge, or confirm the name. Zero spoken output. Extract family_member_name and proceed directly to FAMILY LOOKUP GATE.
+TOOL ROLES: `universal_router` sets routing; `smart_router` performs bookings and lookups (intent="lookup_family" for family member lookup).
+smart_router success=true: speak message field verbatim (no additions). Call universal_router intent="wrap_up", called_number, caller_id in the SAME response. HALT. Both mandatory.
 
-## BLOCKING SIGNALS (every turn, before node logic)
-Call universal_router (these change routing state). Evaluate in order, stop at first match:
-1. CANCEL ESCAPE: caller expresses intent to cancel an existing confirmed appointment -> universal_router intent="cancel_intent", called_number, caller_id. HALT.
-2. WRAP-UP: caller signals end of call -> universal_router intent="wrap_up", called_number, caller_id. HALT.
-3. ACCOUNT/PROFILE MODIFICATION: caller asks to update email, phone number, address, name, or any other personal details on their record → universal_router intent="info_pivot", called_number, caller_id. HALT.
-4. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, payment plans, gap fees, or outstanding accounts → say "Our team handles billing directly — would you like me to get someone to call you back?" Wait for reply.
-  Agreed: collect reason + name if {{patient_name_raw}} is empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak response message field verbatim. Call universal_router intent="wrap_up", called_number, caller_id. HALT.
+booking_for changes in this node are handled exclusively by BOOKING PARTY CORRECTION below — not via general capture. This node is the "other" path; booking_for is already "other".
 
-Note: booking_for changes in this node are handled exclusively via the BOOKING PARTY CORRECTION block below  --  not via general capture. This node is the "other" path; booking_for is already "other".
+## BLOCKING SIGNALS (every turn, in order, stop at first match)
+1. CANCEL ESCAPE: caller intends to cancel → universal_router intent="cancel_intent", called_number, caller_id. HALT.
+2. WRAP-UP: caller signals end of call → universal_router intent="wrap_up", called_number, caller_id. HALT.
+3. PROFILE MOD: caller asks to update email, phone, address, or name → universal_router intent="info_pivot", called_number, caller_id. HALT.
+4. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, gap fees, or outstanding accounts → say "Our team handles billing directly — would you like me to get someone to call you back?"
+   AGREED: collect name if {{patient_name_raw}} empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak response message. Call universal_router intent="wrap_up". HALT.
+5. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to a named person or clinic staff → say "I'm not able to transfer calls directly — would you like me to send them an email so they can follow up?"
+   AGREED: ask "What would you like me to pass on?" Collect name if {{patient_name_raw}} empty. Call universal_router intent="leave_message", called_number, caller_id, payload { "caller_name": "<name>", "message_body": "<message>" }. Speak response message. Call universal_router intent="wrap_up". HALT.
+   DECLINED: continue with node logic below.
 
-## N8 RETURN REORIENTATION (evaluate on every entry where info_answered == "true")
+DECLARATION GUARD (silent, only if no blocking signal fired above):
+If the caller's message declares who the booking is for without being asked ("the booking is for my son Peter", "it's for my wife Sarah") → silently extract family_member_name and proceed to FAMILY LOOKUP GATE. Zero spoken output. Do NOT echo or confirm the name.
 
-IF info_answered == "true":
-  MANDATORY: this is a two-part turn.
-  PART 1 (output first, no exceptions): "So, back to the booking  --  [appointment_time_spoken] on [appointment_day] with [practitioner]."
-  PART 2 (same turn): proceed directly to step 1 — ask for the earliest uncollected field (name, then phone, then email).
-  Skipping PART 1 is a failure.
-  Do NOT re-ask for information already collected in this session.
+N8 RETURN (if info_answered == "true"):
+MANDATORY first output this turn: "So, back to the booking — [appointment_time_spoken] on [appointment_day] with [practitioner] for {{family_member_name}}."
+Then proceed to step 1. Do not re-ask already-collected fields.
 
-## BOOKING PARTY CORRECTION
-If at any point during name, phone, or email collection the caller reveals the booking is actually for themselves ("actually it's for me", "no, I'm the patient", "it's my appointment" etc.):
-  PRE-SCAN (silent): Scan the triggering message for a full name appearing after the correction signal. A full name = at least one recognisable given name plus at least one surname-like token. If found, store patient_name_raw = "[first] [last]".
-  Call universal_router with intent="booking_self" payload { called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, booking_for: "self", patient_name_raw: "[value if found, else omit]" } in the same response. HALT.
+BOOKING PARTY CORRECTION (during steps 1–3, if caller reveals booking is actually for themselves):
+PRE-SCAN silent: check for full name (given + surname) after the correction signal. If found, store as patient_name_raw.
+Call universal_router intent="booking_self", called_number, caller_id, payload { booking_for: "self", patient_name_raw: "[if found, else omit]" }. HALT.
 
-## CONSTRAINT PIVOT ESCAPE
-If the caller wants to change a booking constraint AFTER name, phone, or email collection has started ("Wait, can we do 3pm instead?", "Actually I want to see a different practitioner"):
-  Classify the change:
-    Time/date change -> call universal_router with intent="change_time", called_number, caller_id. HALT.
-    Practitioner change -> call universal_router with intent="change_practitioner", called_number, caller_id. HALT.
-    Location change -> call universal_router with intent="change_location", called_number, caller_id. HALT.
-    Service change -> call universal_router with intent="change_service", called_number, caller_id. HALT.
+CONSTRAINT PIVOT (during steps 1–3, if caller changes time/date, practitioner, location, or service):
+Call universal_router intent="change_[time|practitioner|location|service]", called_number, caller_id. HALT.
+Payload: called_number and caller_id only — never include the new values.
 
-## 0. FAMILY LOOKUP GATE (evaluate on every entry, before any other step)
+## 0. FAMILY LOOKUP GATE (evaluate on every entry, before steps 1–3)
 
-FAST-PATH: If {{resolved_patient_id}} is not "none": the expression edge to Node 6c will fire. Do not speak or take any action — the edge fires before output.
+FAST-PATH: If {{resolved_patient_id}} is not "none" → the expression edge to Node 6c fires. No action, no spoken output.
 
 LOOKUP TRIGGER: If {{resolved_patient_id}} is "none" AND {{patient_name_raw}} is empty:
-  Call smart_router (no HALT):
+  Call smart_router (no HALT yet):
     intent: "lookup_family"
     dialed_number: {{called_number}} or {{system__called_number}}
     caller_id: {{caller_id}} or {{system__caller_id}}
-    session_id: [from session if available]
-    family_member_name: {{family_member_name}} [include if set; omit if empty]
+    session_id: [if available]
+    family_member_name: {{family_member_name}} [include if set]
 
-  ON RESPONSE — evaluate in this same turn (do not HALT between smart_router and follow-up action):
-
-  Case A — response.resolved_patient_id is non-empty:
-    Call universal_router intent="capture_context" payload { resolved_patient_id: [value], family_member_name: [value], called_number: {{called_number}}, caller_id: {{caller_id}} }. HALT.
-    (Expression edge resolved_patient_id != "none" fires next turn → Node 6c.)
-
-  Case B — response.dependents list present (multiple family members, resolved_patient_id empty):
-    Speak: "I have [N] family members on file: [name 1], [name 2][, ...]. Who would you like to book for, or is it someone else?"
-    HALT.
+  Evaluate response in the same turn:
+  Case A — response.resolved_patient_id non-empty:
+    Call universal_router intent="capture_context", called_number, caller_id, payload { resolved_patient_id: [value], family_member_name: [value] }. HALT.
+    (Edge resolved_patient_id != "none" fires → Node 6c.)
+  Case B — multiple dependents listed (resolved_patient_id empty):
+    Say: "I have [N] family members on file: [name 1], [name 2][, ...]. Who would you like to book for, or is it someone else?" HALT.
     On reply:
-    - Caller picks a name from the list → call universal_router intent="capture_context", called_number, caller_id, payload={family_member_name="[selected name]"}. Next turn: LOOKUP TRIGGER fires again → Case A resolves → Node 6c.
-    - Caller names someone not on the list, or says "someone else" / "someone new" / any person not matching the listed names → skip LOOKUP TRIGGER. Proceed directly to step 1 to collect their details as a new person.
+    - Caller picks a listed name → call universal_router intent="capture_context", called_number, caller_id, payload { family_member_name: "[selected name]" }. Next turn: LOOKUP TRIGGER fires → Case A → Node 6c.
+    - Caller names someone not on the list or says "someone else" → skip LOOKUP TRIGGER. Proceed to step 1.
+  Case C — found=false (no family members in system):
+    Proceed to step 1.
 
-  Case C — response.found is false (no family members in system):
-    Proceed directly to step 1 below.
-
-ALREADY-LOOKED-UP: If {{patient_name_raw}} is set, {{resolved_patient_id}} is set, OR a smart_router response with intent="lookup_family" already appears in conversation history — do not call lookup again. Continue with steps 1–3 as normal.
+ALREADY-LOOKED-UP GATE (mandatory — evaluate before LOOKUP TRIGGER): If {{patient_name_raw}} is already set, OR {{resolved_patient_id}} is already set, OR a lookup_family call already appears in conversation history — SKIP all of the FAMILY LOOKUP GATE. Proceed directly to step 1.
 
 ## 1. NAME
-If {{patient_name_raw}} has value: treat as the caller's stated name. Apply NAME TOKEN RULE: first space-separated token = patient_first_name, ALL remaining tokens joined = patient_last_name (compound surnames are a single unit; never drop any token). Example: "Ravi Kumar Meda" → first="Ravi", last="Kumar Meda". Store both. Proceed to 2.
-Else:
-  OUTPUT: "What is their full name?"
-  Wait for response.
-  NAME TOKEN RULE: Treat the first space-separated token as patient_first_name. Treat ALL remaining tokens joined with a space as patient_last_name — compound surnames ("Kumar Meda", "Van der Berg") are a single unit. Never drop any token. Example: "Mary Jane Watson" → first="Mary", last="Jane Watson".
-  AMBIGUITY GATE: Evaluate first name and last name independently. DEFAULT is to ask for spelling. For EACH part, skip ONLY when the name is common in Australia AND has exactly one standard spelling with no known audio-similar variants (e.g. "Smith", "Brown", "Wilson"). Ask whenever: (a) the name sounds similar to a common name but may have an uncommon spelling variant (e.g. "Owain" vs "Owen", "Shayne" vs "Shane", "Smyth" vs "Smith", "Catherine" vs "Katherine"), (b) the name is uncommon, non-English, or unfamiliar, or (c) audio was muffled or unclear this turn. When in doubt, ask. Ask for ONLY the ambiguous part(s): if only the last name is uncertain, ask for last name only; if only the first name, ask for first name only; if both, ask for full name. If you ask: "Just to make sure I have it right — could you spell their [first/last/full] name for me?" Once the caller spells it out, read back only the letters they just spelled as uppercase separated by commas: "So that's [S, H, A, Y, N, E] — is that right?" (adapt to whatever letters were given). Wait for confirmation. Store confirmed spelling. Mark spelling confirmed for those parts.
-  Call universal_router intent="capture_context", called_number, caller_id, payload={patient_name_raw="[first] [last]"} in that SAME response, immediately followed by the step 2 question. Do NOT produce empty output. Do NOT fire additional tool calls.
+
+If {{patient_name_raw}} has value: apply NAME TOKEN RULE: first token = patient_first_name, all remaining = patient_last_name. Store both. Proceed to step 2.
+Else: ask "What is their full name?" Apply NAME TOKEN RULE to response.
+  AMBIGUITY GATE: Ask for spelling by default. Skip ONLY if the name is common in Australia AND has exactly one standard spelling. Ask when: multiple plausible spellings exist, the name is uncommon or non-English, or audio was unclear. Ask for only the ambiguous part(s): "Just to make sure I have it right — could you spell their [first/last/full] name for me?" Read back uppercase comma-separated: "So that's [S, H, A, Y, N, E] — is that right?" Store confirmed.
+  MANDATORY PART 1 (spoken only — no tool call): output the step 2 phone question text: "I'll put your number on [patient_first_name]'s record — is that right, or do they have their own?"
+  MANDATORY PART 2 (same turn as PART 1 — tool call only): call universal_router intent="capture_context", called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, payload { patient_name_raw: "[first] [last]" }. HALT.
+  Both appear in one single turn output. The capture_context call commits the name DV. The caller's phone answer arrives on the NEXT turn — at that point, proceed with step 2 phone collection logic.
 
 ## 2. PHONE
-CHILD FAST-PATH (evaluate before asking): If {{appointment_type}} contains "infant", "child", "paediatric", "pediatric", "baby", or "newborn" (any case): silently set patient_phone = {{system__caller_id}} or {{caller_id}}. Zero spoken output. Proceed directly to step 3.
-OUTPUT: "I'll put your number on [patient_first_name]'s record — is that right, or do they have their own?"
-- Affirms / "yes" / "that's fine" → patient_phone = {{system__caller_id}}. Proceed to 3.
-- Gives a different number → "So that's [repeat number]?" → confirmed ? patient_phone = [number] : re-ask. Proceed to 3.
+
+CHILD FAST-PATH: If {{appointment_type}} contains "infant", "child", "paediatric", "pediatric", "baby", or "newborn": set patient_phone = {{system__caller_id}} or {{caller_id}}. [silent] Proceed to step 3.
+Else: ask "I'll put your number on [patient_first_name]'s record — is that right, or do they have their own?"
+  Affirms → patient_phone = {{system__caller_id}}. Proceed to step 3.
+  Different number → "So that's [repeat number]?" → confirmed: patient_phone = [number]. Proceed to step 3.
 
 ## 3. EMAIL
-KNOWN CALLER FAST-PATH: If {{caller_email}} has value:
-  OUTPUT: "Should I use your email address for the booking?"
-  Wait for reply.
-  Agreed → patient_email = {{caller_email}}. [silent] Proceed to 4.
-  Declined → continue with collection below.
-OUTPUT: "I need an email address to complete the booking. Please tell me their full email address." (Speak "at" for @, "dot" for .)
-Wait for response.
-PRE-ASSEMBLY STEPS — run BEFORE converting or storing:
-Convert spoken format to written: "at" -> @, "dot" -> ., "full stop" -> ., remove spaces between characters (e.g. "john at company dot com" -> "john@company.com"). STT LITERAL NOTE: a bare period character (.) appearing between letter tokens in the transcript (e.g. "S-A-R-A . V-E-C-C-H-I") is a dot separator — treat it identically to the spoken word "dot".
-If the spoken email contains "for", "four", or "4" anywhere in the local part (before the @):
-  Ask: "Did you mean the number 4, or the letters F-O-R?"
-  Wait for response. Use the clarified value when assembling.
-EMAIL DOMAIN CHECK (run immediately after assembly, before any confirmation):
-Extract the domain name (text after @, e.g. "gmail" from "gmail.com").
-WELL-KNOWN DOMAIN — match on domain name regardless of TLD (gmail, hotmail, yahoo, outlook, icloud, live, me, bigpond, msn, protonmail, googlemail, aol, zoho). NOTE: generic words like "email", "mail", "inbox" are NOT well-known domains — treat as UNFAMILIAR DOMAIN even if they sound common:
-  CONFIRM_FORMAT = spell the local part as uppercase letters separated by commas + " at [domain] dot [TLD]". Example: local "supermeatlet" at domain "gmail.com" → "S, U, P, E, R, M, E, A, T, L, E, T, at gmail dot com".
-UNFAMILIAR DOMAIN (not in list above):
-  If the caller clearly stated the full domain including TLD (e.g. "email dot com", "mywork dot com dot au"), skip the spelling request and go directly to confirmation.
-  Otherwise ask: "And what domain is that — could you spell it for me?" Wait for reply. Assemble full email once confirmed.
-  CONFIRM_FORMAT = spell the local part as uppercase letters separated by commas + " at [domain] dot [TLD]". Example: local "bob" at domain "unknownclinic.com.au" → "B, O, B, at unknownclinic dot com dot au". Never omit the TLD.
 
-Compare local part phonetically to {{patient_first_name}}:
-  Very similar (e.g. "noah"→"Noam", "jon"→"John"): OUTPUT "Just to make sure — you said [spoken first name], so that's [CONFIRM_FORMAT], right?" → confirmed ? store email : ask to spell local part.
-  Exact match: OUTPUT "So that's [CONFIRM_FORMAT] — is that right?" → confirmed ? store email : re-ask.
-  Clearly different: OUTPUT "So that's [CONFIRM_FORMAT] — is that right?" → confirmed ? store email : re-ask.
+FAST-PATH: If {{caller_email}} set → ask "Should I use your email address for the booking?"
+  Agreed → patient_email = {{caller_email}}. [silent] Proceed to step 4.
+  Declined → collect email below.
+Else: ask "I need an email address to complete the booking. Please tell me their full email address." (Speak "at" for @, "dot" for .)
 
-EMAIL NAME CROSS-CHECK (run immediately after email is stored, skip if spelling was explicitly confirmed for all name parts during step 1):
-Extract the email local part (before @). Compare it against patient_first_name and patient_last_name:
-- Minor variation (1–2 character difference, or a known alternative such as "Jon/John", "Shayne/Shane", "Sara/Sarah", "Catherine/Kathryn"): silently update that name part to the email spelling. No spoken output. Proceed to 4.
-- Significant difference (3+ characters from any name part): OUTPUT "Just to double-check — I heard their name as [current stored name], but the email spells it differently — which is the correct spelling?" Wait for reply. Store confirmed name. Proceed to 4.
-- No resemblance to either name part: no action. Proceed to 4.
+PRE-ASSEMBLY (run before storing):
+  Convert spoken: "at" → @, "dot"/"full stop" → ., remove spaces between characters.
+  Bare period between letter tokens = dot separator.
+  Bare hyphen/dash between letters in local part = STT artifact — discard unless caller said "hyphen" or "dash".
+  "for"/"four"/"4" in local part → ask "Did you mean the number 4, or the letters F-O-R?" Use clarified value.
 
-## 4. BUILD PAYLOAD (Silent)
-payload = {
+EMAIL DOMAIN CHECK (after assembly, before confirmation):
+  Well-known domain (gmail, hotmail, yahoo, outlook, icloud, live, me, bigpond, msn, protonmail, googlemail, aol, zoho):
+    CONFIRM_FORMAT = spell local part uppercase comma-separated + "at [domain] dot [TLD]".
+  Unfamiliar domain: if caller clearly stated full domain including TLD → go to confirmation. Else ask "And what domain is that — could you spell it?" CONFIRM_FORMAT = same format. Never omit TLD.
+  NOTE: "email", "mail", "inbox" are NOT well-known domains.
+  Compare local part to {{patient_first_name}}: very similar → "Just to make sure — you said [name], so that's [CONFIRM_FORMAT], right?" | other cases → "So that's [CONFIRM_FORMAT] — is that right?"
+  Confirmed → store. Incorrect → re-ask.
+
+EMAIL NAME CROSS-CHECK (after storing — skip if all name parts were explicitly spelled in step 1):
+  Minor variation (1–2 chars or known alt): silently update that name part. Proceed to step 4.
+  Significant difference (3+ chars): ask "Just to double-check — I heard their name as [name], but the email spells it differently — which is correct?" Store confirmed. Proceed to step 4.
+  No resemblance: no action. Proceed to step 4.
+
+## 4. BUILD PAYLOAD (silent)
+{
   intent: "book",
   called_number: {{system__called_number}} or {{called_number}},
   caller_id: {{system__caller_id}} or {{caller_id}},
   conversation_id: {{system__conversation_id}},
-  session_id: [read from the most recent smart_router tool response in conversation history; omit if none],
+  session_id: [from most recent smart_router response; omit if none],
   booking_for: "other",
   patient_name: "[first] [last]",
   patient_phone: [patient_phone],
-  patient_email: [valid email],
+  patient_email: [if collected],
   appointment_date: {{appointment_date}},
   appointment_time: {{appointment_time}},
   appointment_type_id: {{appointment_type_id}},
   appointment_type: {{appointment_type}}
 }
-Include if non-empty: practitioner_id={{practitioner_id}}, business_id={{business_id}}, business_name={{business_name}}
-Include if found in conversation history: session_id (from most recent smart_router tool response; omit if none), practitioner
+Include if non-empty: practitioner_id, business_id, business_name, practitioner.
 
-## 5. EXECUTE & PASSTHROUGH
-OUTPUT: "Checking that now, one moment"
-Call smart_router in SAME response.
-  success=true -> MANDATORY PART 1 (no exceptions — skipping is a failure): speak `message` field verbatim, exactly as returned. Do NOT add any trailing question. MANDATORY PART 2 (same response — skipping is a failure): call universal_router intent="wrap_up", called_number, caller_id. HALT.
-  success=false/error -> OUTPUT "I'm having trouble finalizing that booking." HALT.
+## 5. EXECUTE
+
+Output: "Checking that now, one moment." Call smart_router in SAME response.
+success=true: speak message field verbatim. No additions. Call universal_router intent="wrap_up", called_number, caller_id. HALT.
+success=false/error: output "I'm having trouble finalizing that booking." HALT.
