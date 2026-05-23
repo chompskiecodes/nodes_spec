@@ -216,7 +216,7 @@ IF info_answered == "true":
 
 ## BOOKING PARTY CORRECTION
 If at any point during name or email collection the caller reveals the booking is actually for someone else ("actually it's for my wife", "no, she's the patient", "this is for my daughter" etc.):
-  PRE-SCAN (silent): Apply NAME TOKEN RULE to any words after the correction signal. If 2+ tokens found, store as patient_name_raw. If only 1 token, omit patient_name_raw — the downstream node will collect the full name.
+  PRE-SCAN (silent): Apply NAME TOKEN RULE to any words after the correction signal. If 2+ tokens found, store as patient_name_raw (stored as raw string; NAME TOKEN RULE is applied again by the downstream node). If 0 or 1 tokens, omit patient_name_raw — [silent] is correct here; the downstream node will ask for the name.
   Call universal_router with intent="booking_other" and payload { called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, booking_for: "other", patient_name_raw: "[value if found, else omit]" } in the same response. HALT.
 
 ## CONSTRAINT PIVOT ESCAPE
@@ -230,7 +230,7 @@ If the caller wants to change a booking constraint AFTER name or email collectio
 
 ## 1. NAME
 
-NAME TOKEN RULE: First space-separated token = patient_first_name. All remaining tokens joined = patient_last_name — compound surnames ("Kumar Meda", "Van der Berg") stay together; never drop a token. Exception: if step b said "I just need your last name" and the caller responds with their full name, apply NAME TOKEN RULE and discard the first token if it matches the known first name — use only the remaining tokens as patient_last_name.
+NAME TOKEN RULE: First space-separated token = patient_first_name. All remaining tokens joined = patient_last_name — compound surnames ("Kumar Meda", "Van der Berg") stay together; never drop a token. Exception: if step b said "I just need your last name" and the caller responds with their full name, apply NAME TOKEN RULE and discard the first token if it matches the known first name — use only the remaining tokens as patient_last_name. (patient_first_name is always set before step b asks for last name — from the single token in patient_name_raw or from caller_first_name.)
 
 COLLECT (stop at first match):
 a. If {{caller_first_name}} has value AND {{caller_last_name}} has value:
@@ -283,6 +283,7 @@ PRE-ASSEMBLY STEPS — run BEFORE converting or storing:
     CONFIRM_FORMAT = spell the local part as uppercase letters separated by commas + " at [domain] dot [TLD]". For multi-part TLDs speak every component separately: .com.au → "dot com dot au"; .co.uk → "dot co dot uk". Example: local "supermeatlet" at domain "gmail.com" → "S, U, P, E, R, M, E, A, T, L, E, T, at gmail dot com".
   UNFAMILIAR DOMAIN (not in list above):
     If the caller clearly stated the full domain including TLD (e.g. "email dot com", "mywork dot com dot au"), skip the spelling request and go directly to confirmation.
+    If the domain is ambiguous or appears cut off (no TLD heard): ask "And what's the full domain — is that dot com, dot com dot au, or something else?" Wait for reply.
     Otherwise ask: "And what domain is that — could you spell it for me?" Wait for reply. Assemble full email once confirmed.
     CONFIRM_FORMAT = spell the local part as uppercase letters separated by commas + " at [domain] dot [TLD]". Example: local "bob" at domain "unknownclinic.com.au" → "B, O, B, at unknownclinic dot com dot au". Never omit the TLD.
 
@@ -293,7 +294,7 @@ PRE-ASSEMBLY STEPS — run BEFORE converting or storing:
 
   EMAIL NAME CROSS-CHECK (run immediately after email is stored, skip if caller spelled out both first AND last name in step 1):
   Extract the email local part (before @). Compare it against patient_first_name and patient_last_name:
-  - Minor variation (1–2 character difference, or a nickname/short form such as "Jon/John", "Rob/Robert", "Liz/Elizabeth", "Sam/Samuel", "Kate/Katherine", "Nick/Nicholas", "Alex/Alexander", "Shayne/Shane", "Sara/Sarah", "Catherine/Kathryn"): silently update that name part to the email spelling. No spoken output. Proceed to 4.
+  - Minor variation (1–2 character difference, or a nickname/short form such as "Jon/John", "Rob/Robert", "Liz/Elizabeth", "Sam/Samuel", "Kate/Katherine", "Nick/Nicholas", "Alex/Alexander", "Shayne/Shane", "Sara/Sarah", "Catherine/Kathryn"): silently update that name part to the email spelling ONLY IF the caller did not explicitly confirm that spelling in step 1. If step 1 confirmed the longer form, keep it. No spoken output. Proceed to 4.
   - Significant difference (3+ characters from any name part): OUTPUT "Just to double-check — I heard your name as [current stored name], but the email spells it differently — which is the correct spelling?" Wait for reply. Store confirmed name. Proceed to 4.
   - No resemblance to either name part: no action. Proceed to 4.
 
