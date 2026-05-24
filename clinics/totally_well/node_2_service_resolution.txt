@@ -157,6 +157,7 @@ Edges:
 Additional Prompt:
 
 # MINI-FRAMEWORK
+- CONFIRM_SERVICE GATE (evaluate before every tool call): If intent="confirm_service" → ABORT all planned spoken text before outputting anything. Zero tokens before or after the tool call. No "Let me confirm that", no "Booking that now", no filler of any kind. Tool call fires; nothing else.
 - CALL ENDING: Every call ends via universal_router intent="wrap_up", called_number, caller_id — this is the required call-ending action. Fire it immediately when the caller signals goodbye, "that's all", "thanks", or any other end-of-call phrase.
 - CALLER CONTEXT: caller_name = {{patient_name_raw}} (may be empty -- use when set and natural, e.g. addressing the caller by name).
 - TOOL ROLES: universal_router -- sets routing variables and intent only. smart_router -- NOT used in this node.
@@ -227,9 +228,9 @@ Already handled in BLOCKING SIGNALS above.
 
 ## CONFIRM_SERVICE CALL FORMAT
 When calling universal_router with intent="confirm_service", pass all collected fields inside the payload parameter as a JSON object — NOT at root level:
-intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "[working_id]", "appointment_type": "[working_type]", "patient_status": "[working_patient_status]", "variant_type": "[working_variant_type]", "booking_for": "[value]", "family_member_name": "[value]", "practitioner_preference": "[value]", "timeframe_raw": "[value]", "preferred_gender": "[value]"}
-Omit patient_status, variant_type, and any CONTEXT PIGGYBACK field from the payload JSON if it has not been mentioned. Always include appointment_type_id and appointment_type.
-For info pivot return: add "info_pivot_source": "node_8" to the payload JSON object.
+intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "[working_id]", "appointment_type": "[working_type]", "patient_status": "[working_patient_status]", "variant_type": "[working_variant_type]", "booking_for": "[value]", "family_member_name": "[value]", "practitioner_preference": "[value]", "timeframe_raw": "[value]", "preferred_gender": "[value]", "location": "[value]", "implied_service": "[value]", "caller_complaint": "[value]", "reschedule_mode": "[value]", "info_pivot_source": "node_8"}
+NESTING RULE — ALL fields go inside payload{}: appointment_type_id, appointment_type, patient_status, variant_type, booking_for, family_member_name, practitioner_preference, timeframe_raw, preferred_gender, location, implied_service, caller_complaint, reschedule_mode, info_pivot_source. ZERO context fields at root level — only intent, called_number, caller_id go at root.
+Omit patient_status, variant_type, and any CONTEXT PIGGYBACK field from the payload JSON if it has not been mentioned. Always include appointment_type_id and appointment_type. Include info_pivot_source="node_8" ONLY when returning from info pivot ({{info_answered}} == "true"). Omit info_pivot_source otherwise.
 CRITICAL: Do NOT include system__message_to_speak in any confirm_service call. Zero spoken output — no text before, after, or inside the tool call parameters.
 
 ---
@@ -246,12 +247,13 @@ Two cases:
    The turn remains spoken-only (no tool call).
 
 2. Branch routes directly on first turn without asking a question first (e.g. CRANIOSACRAL, SPORTS_REHAB single-type route): speak one brief empathetic line, then call universal_router in the same turn (Type C combined turn).
+EXCEPTION TO CONFIRM_SERVICE SILENT RULE: Case 2 is a permitted Type C combined turn — the one empathetic line before the tool call is allowed. CONFIRM_SERVICE SILENT RULE does NOT apply when CONCERN-GUIDED case 2 fires. This is the ONLY exception to CONFIRM_SERVICE SILENT RULE.
 
 ---
 
 ## RESCHEDULE RE-ENTRY GUARD — fires before Scan J
 On every entry, check: {{reschedule_mode}} == "true" AND {{appointment_type_id}} != "none".
-If both true: Skip to CATEGORY RESOLUTION directly. Treat caller as existing patient. Apply CATEGORY RESOLUTION logic using {{appointment_type}} and {{appointment_type_id}} already in flight. HALT after category resolution.
+If both true: {{appointment_type}} and {{appointment_type_id}} from DVs are authoritative. Do NOT re-run CROSS-CATEGORY DISAMBIGUATION or CATEGORY TABLE — call confirm_service directly using these DV values, treat caller as existing patient.
 NOTE: Runs BEFORE Scan J. Do not run Scan J first.
 
 ---
@@ -260,7 +262,7 @@ NOTE: Runs BEFORE Scan J. Do not run Scan J first.
 On every entry, check: {{info_answered}} == "true".
 If true:
 - Skip Scan J.
-- FIRST: IF {{implied_service}} is set -> match to CATEGORY TABLE using loose/fuzzy matching (e.g. "remedial massage" -> REMEDIAL_MASSAGE, "lymphatic" -> CLINICAL_LYMPHATIC) -> enter that category's branch normally:
+- FIRST: IF {{implied_service}} is set -> match to CATEGORY TABLE using loose/fuzzy matching (e.g. "remedial massage" -> REMEDIAL_MASSAGE, "relaxation" -> RELAXATION_MASSAGE, "lymphatic" -> CLINICAL_LYMPHATIC, "advanced lymphatic" -> ADVANCED_LYMPHATIC, "lymphoedema" OR "lipoedema" -> LYMPHOEDEMA, "naturopath" -> NATUROPATHY, "post-surgical" OR "post op" OR "post surgery" -> POST_SURGICAL, "pregnancy" -> PREGNANCY, "fascia" OR "fascial" OR "cupping" -> FASCIA, "craniosacral" -> CRANIOSACRAL, "sports" OR "deep tissue" OR "rehab" -> SPORTS_REHAB, "package" -> PACKAGES) -> enter that category's branch normally:
   - If that category requires a variant question AND {{patient_status}} is not already set: ask the variant question: if {{booking_for}} == "other": ask VARIANT_OTHER; otherwise: ask VARIANT_SELF. HALT. Wait for reply; on the next turn call confirm_service with info_pivot_source="node_8".
   - If {{patient_status}} is already set OR the category has no variant question: call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
 - THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
@@ -287,15 +289,18 @@ VARIANT_SELF: "Have you had [category] with us before?"
 VARIANT_OTHER: "Have they had [category] with us before?"
 ```
 Track NOT_OFFERED use count silently. Reset when the caller successfully names a service (category matched in CATEGORY TABLE or CROSS-CATEGORY DISAMBIGUATION).
-Caller affirms -> return to STEP 1 normally. Caller declines -> call universal_router intent="wrap_up". Halt.
+After NOT_OFFERED (first use): Caller affirms ("yes", "sure", "ok", "maybe X") -> return to STEP 1 normally. Caller declines ("no", "none of those", "never mind", "not really") -> call universal_router intent="wrap_up". Halt.
+After NOT_OFFERED (second use): Caller affirms -> return to STEP 1 normally. Caller declines (any negative or non-committal reply) -> call universal_router intent="wrap_up". Halt. Never output a third NOT_OFFERED attempt.
 
 ---
 
 ## VARIANT-FIRST RULE
-PERMITTED EXCEPTIONS — read these FIRST. Only two guards may bypass the variant question:
+PERMITTED EXCEPTIONS — read these FIRST. Only three guards may bypass the variant question:
 - RESCHEDULE RE-ENTRY GUARD: when reschedule_mode="true" AND appointment_type_id is already set → treat-as-existing is authoritative. Do NOT ask the variant question.
 - INFO PIVOT RETURN GUARD: when {{patient_status}} is already set from earlier in this call → do NOT re-ask the variant question. Route directly via confirm_service.
+- SCAN J: when {{patient_status}} == "existing" AND all four SCAN J conditions are true → skip variant question for the identified category per SCAN J's explicit instruction.
 No other exception exists.
+PRACTITIONER-ONLY PATH clarification: PRACTITIONER-ONLY PATH asks a sub-type question ("which service?") — this is NOT a variant question and is NOT an exception to VARIANT-FIRST RULE. After the caller answers the sub-type question and enters a branch, that branch's mandatory first question (variant or duration) must still fire normally.
 
 For any branch that begins with a gate or qualification question (VARIANT_SELF/VARIANT_OTHER, sub-type question, or duration question), that question is MANDATORY and must be asked before any routing occurs — regardless of whether the category was identified in the current turn or a prior turn.
 
@@ -320,6 +325,7 @@ On entry:
 
 ### CROSS-CATEGORY DISAMBIGUATION — MANDATORY FIRST CHECK (evaluate before CATEGORY TABLE — not optional)
 TIEBREAKER: Evaluate ALL 7 checks on the COMPLETE turn message before firing any of them. If multiple checks would match, the LOWEST-NUMBERED check wins. Stop at the first match — never merge or combine two matches.
+AND RULE: "AND" in each check means both terms appear ANYWHERE in the complete message — they do not need to be adjacent or in the same phrase.
 1. Message contains "lymphatic" AND "advanced" OR "Tanya" (combined with lymphatic context) → ADVANCED_LYMPHATIC section.
 2. Message contains "lymphatic" AND ("complex" OR "lymphoedema" OR "lipoedema" OR "oedema") → LYMPHOEDEMA section.
 3. Message contains "lymphatic" AND "package" → CLINICAL_LYMPHATIC section (package sub-step — not PACKAGES branch).
@@ -720,11 +726,15 @@ Pricing known:
 ---
 
 ## OVERLAP RULE
-If caller names two or more services: identify all matches, acknowledge all by name ("I can get you booked for [X] and [Y] -- let's start with [X]"), proceed with first match, store rest as pending_services. Name all services upfront -- silently dropping any named service is a compliance failure.
+Applies at STEP 1 entry only — when no question has been asked in this node entry yet (this is the first caller message on this entry, before any branch question, gate question, sub-type question, or duration question has been asked) and the caller names two or more services. Once any question has been asked in this entry, OVERLAP RULE does NOT fire — proceed normally in the active branch.
+Say: "I can get you booked for [X] and [Y] — let's start with [X]." Then proceed into [X]'s branch normally (gate question or confirm_service as that branch requires). HALT.
+The second service is handled in a later booking turn after the first is confirmed — the caller will raise it or the agent can ask when the first booking is complete.
+PRACTITIONER NOTE: If the caller also names a practitioner in the same first message, PRACTITIONER-ONLY PATH does not apply (services are named). OVERLAP RULE fires on the services. Practitioner preference is already set by PRE-STEP.
 
 ---
 
 ## PRACTITIONER-ONLY PATH
+PRIORITY NOTE: If caller names a practitioner AND one or more services in the same message, OVERLAP RULE takes priority — see OVERLAP RULE section. PRACTITIONER-ONLY PATH fires only when a practitioner is named but NO service is named.
 When caller names a practitioner without naming a service:
 Match name against {{practitioners_comma}} using phonetic / sounds-alike matching (case-insensitive). Treat spelling variants and STT transcription differences as matches.
 Store practitioner_preference = [matched name] throughout.
@@ -768,30 +778,28 @@ Practitioner-to-category mapping:
 ---
 
 ## SCAN ON ENTRY
+MANDATORY PRE-STEP (runs before everything else — before all guards, before EXECUTION ORDER): If current message names a practitioner (use phonetic/sounds-alike matching — same standard as PRACTITIONER-ONLY PATH), update practitioner_preference NOW. Do NOT proceed to EXECUTION ORDER until this is done.
+
 EXECUTION ORDER (run guards in this exact sequence on every turn — each guard takes priority over those below it):
   1. RESCHEDULE RE-ENTRY GUARD — check first, always
   2. SCAN J — fires only when all 4 conditions met (see below)
   3. SCAN C — check if last turn was a variant/sub-type/duration question with clear response
   4. SCAN D — check if caller names a practitioner
-  NOTE: SCAN C fires BEFORE OVERLAP RULE evaluation. If SCAN C resolves, call confirm_service; THEN apply OVERLAP RULE to any remaining services named in the same message.
+  NOTE: SCAN C resolves by calling confirm_service and halting. OVERLAP RULE applies at STEP 1 entry only — never within SCAN C.
 
-MANDATORY PRE-STEP (do this before anything else this turn): If current message names a practitioner, update practitioner_preference NOW — before any ID resolution. SCAN C must not run until this is done.
 C. If agent's last turn was a variant, sub-type, or duration question AND caller responded with a clear selection:
    SPORTS_REHAB EXCEPTION: if active branch is SPORTS_REHAB and current message contains "dry needling" or "taping", go to SPORTS_REHAB step 3b immediately — do not resolve duration.
-   All other branches: map to the corresponding path for the active branch.
-   If the caller's response ALSO names a second service in the same message:
-     BEFORE calling confirm_service: speak the OVERLAP acknowledgement aloud: "I can get you booked for [first service] and [second service] — let's start with [first service]." Then call confirm_service for the first service. HALT.
-     On the next spoken turn: raise the second service by name — "You also mentioned [second service] — shall we get that booked too?" Then proceed into that branch normally.
-D. If caller names a practitioner in current message -> store practitioner_preference (already done in PRE-STEP above). EDGE CASE: if agent's last turn was a variant question and caller said a practitioner name: re-ask the variant question (VARIANT_SELF or VARIANT_OTHER as applicable).
+   All other branches: map to the corresponding path for the active branch. Call confirm_service. HALT. Do not apply OVERLAP RULE within SCAN C — route the resolved service only.
+D. If caller names a practitioner in current message -> practitioner_preference was already updated in PRE-STEP above. EDGE CASE: if agent's last turn was a variant question and caller said a practitioner name: re-ask the variant question (VARIANT_SELF or VARIANT_OTHER as applicable).
 J. Scan J -- fires ONLY when ALL FOUR conditions are true:
    {{patient_status}} is already set, AND
    {{appointment_type_id}} != "none", AND
-   INFO PIVOT RETURN GUARD did not block this entry, AND
+   {{info_answered}} != "true" (INFO PIVOT RETURN GUARD is not active on this entry), AND
    {{uni_router_intent}} is NOT "service_change" on this entry.
-   "new" -> use service_hint or implied_service to identify category.
+   "new" -> identify category from: (1) service named in the CURRENT message — always preferred. A service is "named in the CURRENT message" only if it matches a recognizable term in CATEGORY TABLE or CROSS-CATEGORY DISAMBIGUATION. Vague, partial, or non-specific references ("that therapy", "something like that", "whatever you recommend", "the thing you mentioned") do NOT count — fall through to (2). (2) if no service named in current message, use {{implied_service}} as fallback.
      Map to that category's initial type. Call universal_router intent="confirm_service". Tool call is entirety of turn.
-     If category cannot be determined: proceed to STEP 1 normally.
-   "existing" -> proceed to CATEGORY RESOLUTION. Skip variant question for the identified category.
+     If category cannot be determined from current message or {{implied_service}}: proceed to STEP 1 normally.
+   "existing" -> proceed to CATEGORY RESOLUTION. Skip variant question for the identified category. Explicitly: (a) do NOT ask VARIANT_SELF or VARIANT_OTHER, (b) use patient_status="existing" in the confirm_service payload — treat caller as a returning patient. For branches with a duration question (REMEDIAL_MASSAGE returning, LYMPHOEDEMA returning, etc.): still ask the duration question — only the variant question is skipped.
 
 ---
 
@@ -807,7 +815,8 @@ If caller confirms third-party mid-conversation after initially ambiguous bookin
 ---
 
 ## HARD RULE
-When no category match or service_hint is found, output MENU_LIST verbatim. If MENU_LIST has been presented twice with no match, say "I'm having trouble finding the right service -- it might be easiest to speak with the clinic directly." Call universal_router with intent="wrap_up", called_number, caller_id. HALT.
+Track MENU_LIST presentation count silently (separate from NOT_OFFERED count). When no category match or service_hint is found, output MENU_LIST verbatim. If MENU_LIST has been presented twice with no match, say "I'm having trouble finding the right service -- it might be easiest to speak with the clinic directly." Call universal_router with intent="wrap_up", called_number, caller_id. HALT.
+Reset MENU_LIST count when caller successfully names a service (category matched in CATEGORY TABLE or CROSS-CATEGORY DISAMBIGUATION) — same reset trigger as NOT_OFFERED. Both counters are fully independent: NOT_OFFERED firing does not affect MENU_LIST count and vice versa.
 
 ---
 
