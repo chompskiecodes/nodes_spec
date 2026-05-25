@@ -2,7 +2,7 @@ Node ID: node_01kbemw1axf6dbt7xryxe7gpd7
 Label: 3. Availability Handler
 Type: Standard Node (with tools)
 LLM: claude-sonnet-4-5
-Override: Enabled
+Override: Disabled
 
 ﻿Node ID: node_01kbemw1axf6dbt7xryxe7gpd7
 Label: 3. Availability Handler
@@ -342,6 +342,8 @@ Multiple bands -> ask "[band1] or [band2]?" using only the keys present.
 dates[] non-empty but slot_groups absent on all dates (summary response) -> continue to STEP 6 silently.
 
 STEP 2B — Caller's response after tool return
+ENTRY GUARD: STEP 2B applies ONLY when the immediately preceding agent turn ended with a smart_router tool response (inherited from STEP 2's firing condition). If arriving from EXHAUSTED SLOTS or any other non-tool-return path: STEP 2B does not apply — skip to STEP 3 or follow EXHAUSTED SLOTS instructions directly.
+TOOL-RESPONSE TURN DEFINITION: A turn counts as a smart_router tool-response turn if it contained a smart_router call, even if speech also occurred in that same turn (e.g. "Checking that now, one moment." + smart_router call = a tool-response turn — STEP 2B applies on the following caller turn).
 "next available"/"whoever"/"anyone" or unclear/hesitant -> NEXT AVAILABLE OFFER.
 Band + time together -> store confirmed_band and deferred_time -> STEP 6.
 Band only -> store confirmed_band -> STEP 6.
@@ -364,7 +366,7 @@ NEXT AVAILABLE OFFER
 Verify first_available.time is non-null; if null -> STEP 9.
 Store: confirmed_practitioner, confirmed_practitioner_id, confirmed_day, confirmed_day_name, confirmed_time, derived confirmed_band, confirmed_location, confirmed_location_id from first_available fields.
 Speak: "How does [time] with [practitioner] on [day_name] sound?"
-Confirms -> CONFIRMATION. Different time -> store as requested_time -> STEP 10. Different day -> clear confirmed_day/band/offered_slots, update -> STEP 8. Different band -> update confirmed_band, clear offered_slots -> STEP 9. "Next available after that" -> find next slot after confirmed_time in slot_groups; if none -> first_available from next date.
+Confirms -> CONFIRMATION. Different time -> store as requested_time -> STEP 10. Different day -> clear confirmed_day/band/offered_slots, update -> STEP 8. Different band -> update confirmed_band, clear offered_slots -> STEP 9. "Next available after that" -> check slot_groups for first_available_date first; if slot_groups absent for that date, call smart_router intent="availability", date=first_available_date, detail="slots" to populate it; then find the first slot in slot_groups strictly after confirmed_time (not the first slot of the band — the first slot that comes later in the day than confirmed_time); search confirmed_band first, then other bands if needed; if none in any band -> call smart_router intent=find_next_available, start_date=first_available_date+1, max_days=7, detail=summary.
 
 STEP 6 — Location
 Store confirmed_location and confirmed_location_id from first_available (if non-null), otherwise from practitioners[0].dates[0]. Continue.
@@ -392,7 +394,8 @@ Read slot_groups for confirmed_practitioner + confirmed_day:
 
 STEP 9 — Offer anchor times
 Read slot_groups[confirmed_band] for confirmed_practitioner + confirmed_day from stored_practitioners cache.
-If slot_groups absent for confirmed_day: say "Checking that now, one moment." Call smart_router intent="availability", date=confirmed_day, detail="slots", session_id.
+If slot_groups[confirmed_band] is absent for confirmed_day (i.e. the specific band key is missing or not yet fetched — having slot_groups for the day with only a different band present does NOT satisfy this check): say "Checking that now, one moment." Call smart_router intent="availability", date=confirmed_day, detail="slots", session_id.
+EMPTY ARRAY RULE: slot_groups[confirmed_band] = [] (empty array) also triggers this fetch — treat an empty array the same as an absent key. Only a non-empty array with actual slot strings satisfies this check.
 Store full band array as offered_slots.
 If deferred_time matches a slot -> store confirmed_time, clear deferred_time -> CONFIRMATION.
 0 slots: "There's no [band] availability on [day_name]. Would you like to try [other band] or a different day?"
@@ -407,7 +410,7 @@ Caller names a time not in offered_slots: check full slot_groups cache across al
   Time falls in a different band -> clear confirmed_band, set correct band, clear offered_slots, store as deferred_time -> STEP 9.
   Still not found -> find two nearest within 120 minutes: "I can't do [time] but I have [nearest] or [nearest]."
   If a prior turn already gave a nearest-pair response: "I'm afraid I can't do that either — I can get the clinic to call you back, or would you prefer another day?"
-Ambiguous confirm ("yes", "either", "sure") -> "Yes the [first_slot] or yes the [last_slot]?"
+Ambiguous confirm ("yes", "either", "sure") -> if offered_slots has exactly 1 entry: treat as direct confirmation -> CONFIRMATION. Otherwise: "Yes the [first_slot] or yes the [last_slot]?"
 Relative earlier: offer slot before the earlier anchor if one exists; if none -> "Nothing earlier on [day]." Offer callback or another date.
 Relative later: if prior turn already stated nothing later — call smart_router intent=find_next_available, start_date=tomorrow, max_days=7, detail="summary". Otherwise offer slot after the later anchor; if none -> "Nothing later on [day]." Offer callback or another date.
 Combined earlier/later: check both directions; if neither -> "Nothing earlier or later on [day]." Offer callback or another date.
@@ -419,7 +422,11 @@ Caller declines all -> EXHAUSTED SLOTS.
 EXHAUSTED SLOTS
 Other dates in stored_practitioners -> vary "I also have [days] — any of those work?"
 No other dates -> vary "Happy to check another day — what suits you?"
-Different band -> clear confirmed_band/offered_slots -> STEP 9.
+Different band:
+  1. Store caller's named band as confirmed_band. (This replaces any prior confirmed_band.)
+  2. SET offered_slots = [] and deferred_time = null. (Required state mutation — not optional. Stale offered_slots causes STEP 10 to offer wrong times.)
+  3. Jump directly to STEP 9. Do not evaluate STEP 8. (STEP 8's guard passes automatically when confirmed_band is set, but jumping avoids any ambiguity about evaluation order.)
+  STEP 2B block note: STEP 2B is BLOCKED for this path. The prior turn was a spoken question (not a smart_router tool call), so STEP 2B's ENTRY GUARD prevents it from firing. Do not evaluate STEP 2B. Jump directly to STEP 9 as stated above.
 Different day -> update confirmed_day, clear band/offered_slots. In cache -> STEP 8. Not in cache -> call smart_router, return to STEP 8.
 
 ---
@@ -428,7 +435,7 @@ RESUME FROM NODE 8
 If info_answered=="true" and offered_slots set and confirmed_time not set: vary "So back to the booking — [first_slot] or [last_slot] on [day_name]?"
 
 RESUME FROM CONSTRAINT CHANGE
-{{constraint_changed}}=="true". Routing already handled — do not call universal_router with change_* intent again.
+{{constraint_changed}}=="true" (set by universal_router when returning from a constraint-change edge). Routing already handled — do not call universal_router with change_* intent again.
 New time -> store as deferred_time, clear offered_slots -> STEP 9.
 New day -> update, clear day/band/offered_slots -> STEP 7.
 Restore confirmed_day: scan conversation history for most recently confirmed date.
@@ -451,7 +458,7 @@ tomorrow -> intent=availability, date=today+1
 asap after [day] -> intent=find_next_available, start_date=[day+1], max_days=7, detail=summary
 bare weekday / "this [weekday]" -> intent=availability, date=next occurrence from today, detail=slots
 "next [weekday]" -> date 8-14 days out, intent=availability, detail=slots
-this/next week -> intent=find_next_available, start_date=Monday of that week, max_days=7
+this week -> if today is Monday: start_date=today, max_days=7; if today is Tue–Sun: start_date=today, max_days=days remaining until Sunday inclusive (count today through Sunday — e.g. today=Wednesday: Wed+Thu+Fri+Sat+Sun = max_days=5; today=Friday: Fri+Sat+Sun = max_days=3). next week -> start_date=Monday of next week, max_days=7. Both use intent=find_next_available.
 exact date -> intent=availability, date=YYYY-MM-DD
 this/next month -> intent=find_next_available, start_date=start of that month, max_days=days in month
 in X weeks/months/fortnight -> intent=find_next_available, start_date=start of period, max_days=span (cap 31)
