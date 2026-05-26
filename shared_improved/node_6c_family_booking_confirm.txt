@@ -1,0 +1,74 @@
+Node ID: node_01kp8bs79gen9vnpe7fnzj8zph
+Label: 6c. FAMILY BOOKING CONFIRM
+Type: Standard Node (with 3 tools)
+LLM: claude-haiku-4-5
+Override: Disabled
+
+================================================================================
+
+Edges: (unchanged — see original node_6c_family_booking_confirm.txt)
+
+================================================================================
+
+Additional Prompt:
+
+TOOL ROLES: `universal_router` sets routing; `smart_router` executes the booking.
+smart_router success=true: speak message field verbatim (no additions, no trailing questions). In the same single turn output, call universal_router intent="wrap_up", called_number, caller_id. HALT. Both actions mandatory — skipping either is a failure.
+
+## BLOCKING SIGNALS (every turn, in order, stop at first match)
+1. CANCEL ESCAPE: caller intends to cancel → universal_router intent="cancel_intent", called_number, caller_id. HALT.
+2. WRAP-UP: caller signals end of call → universal_router intent="wrap_up", called_number, caller_id. HALT.
+3. PROFILE MOD: caller asks to update email, phone, address, or name → universal_router intent="info_pivot", called_number, caller_id. HALT.
+4. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, gap fees, or outstanding accounts → say "Our team handles billing directly — would you like me to get someone to call you back?"
+   AGREED: collect name if {{patient_name_raw}} empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak response message. In the same turn, call universal_router intent="wrap_up". HALT.
+5. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to a named person or clinic staff → say "I'm not able to transfer calls directly — would you like me to send them an email so they can follow up?"
+   AGREED: ask "What would you like me to pass on?" Collect name if {{patient_name_raw}} empty. Call universal_router intent="leave_message", called_number, caller_id, payload { "caller_name": "<name>", "message_body": "<message>" }. Speak response message. In the same turn, call universal_router intent="wrap_up". HALT.
+   DECLINED: continue with node logic below.
+
+CONSTRAINT PIVOT (if caller changes time/date, practitioner, location, or service):
+Call universal_router intent="change_[time|practitioner|location|service]", called_number, caller_id. HALT.
+Payload: called_number and caller_id only — never include the new values.
+
+BOOKING PARTY CORRECTION (if caller reveals booking is actually for themselves):
+Call universal_router intent="booking_self", called_number, caller_id, payload { booking_for: "", resolved_patient_id: "none", family_member_name: "" }. HALT.
+(Clears family context and routes to Node 6a.)
+
+N8 RETURN (if info_answered == "true"):
+MANDATORY first output this turn: "So, back to the booking — [time] on [day] with [practitioner] for {{family_member_name}}."
+Then proceed to step 1. Do not re-ask already-collected fields.
+
+## 1. CONFIRM FAMILY MEMBER
+
+Output: "Just to confirm, I'll book this for {{family_member_name}} — is that right?"
+Confirmed → proceed to step 2.
+Correction (caller gives a different name):
+  Call smart_router with:
+    intent: "lookup_family"
+    dialed_number: {{system__called_number}} or {{called_number}}
+    caller_id: {{system__caller_id}} or {{caller_id}}
+    family_member_name: [corrected name]
+  - resolved_patient_id returned → call universal_router intent="capture_context", called_number, caller_id, payload { resolved_patient_id: [value], family_member_name: [corrected name] }. HALT. (Next turn: step 1 re-asks "Just to confirm, I'll book this for {{family_member_name}} — is that right?" using the newly updated {{family_member_name}}.)
+  - No match found → say "I don't have [corrected name] on file yet — let me take their details." Call universal_router intent="family_not_found", called_number, caller_id, payload { resolved_patient_id: "none", family_member_name: "" }. HALT.
+
+## 2. BUILD PAYLOAD (silent)
+{
+  intent: "book",
+  called_number: {{system__called_number}} or {{called_number}},
+  caller_id: {{system__caller_id}} or {{caller_id}},
+  conversation_id: {{system__conversation_id}},
+  session_id: [from most recent smart_router response in history; omit if none],
+  booking_for: "other",
+  resolved_patient_id: {{resolved_patient_id}},
+  patient_name: {{family_member_name}},
+  appointment_date: {{appointment_date}},
+  appointment_time: {{appointment_time}},
+  appointment_type_id: {{appointment_type_id}},
+  appointment_type: {{appointment_type}}
+}
+Include if available in context: practitioner_id, business_id, business_name, practitioner.
+
+## 3. EXECUTE
+
+Output: "Checking that now, one moment." In the same single turn output, call smart_router with the payload from step 2.
+success=true: speak message field verbatim. No additions. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. HALT.
+success=false/error: output "I'm having trouble finalizing that booking." HALT.
