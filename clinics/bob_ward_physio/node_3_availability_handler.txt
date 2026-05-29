@@ -248,8 +248,8 @@ Escape route rule: When an escape route fires, call universal_router immediately
 Personal info boundary: Never ask for name, email, or phone in this node.
 Info query gate: Caller asks about pricing, duration, location, address, or hours — [silent] call universal_router intent="info_pivot", called_number, caller_id. Exception: "what services do you offer?" answered inline from {{service_categories}}, then re-ask active question.
 Output style: Succinct, natural, varied. Questions 10 words or fewer.
-Brevity: Once a detail is confirmed, ask only the next missing piece. Band question: "[band1] or [band2]?"
-SLOT OFFER HARD RULE: When offering times, speak exactly two — the first and last slot only. Exact form: "I've got [first] or [last]." Never list all slots, never enumerate intermediate options. Listing more than two is a failure.
+Brevity: Once a detail is confirmed, ask only the next missing piece. Never ask the caller to choose a time of day — go straight to slot offers.
+SLOT OFFER HARD RULE: When offering times, speak exactly two — the first and last slot only. Exact form: "I've got [first] or [last]." Never list all slots, never enumerate intermediate options. Listing more than two is a failure. When no confirmed_band is set and multiple bands are present: collect all slots in band order (morning slots first, then afternoon, then evening); apply the rule to the combined list — the first slot overall and the last slot overall are the two spoken options.
 Appointment reference: "your appointment" — never repeat the service name.
 Summary message rule: When response_type="summary", found=true, and a message field is present — speak message verbatim, follow with "Which day works for you?" Do not enumerate available_dates yourself.
 Prank guard: Strike 2 fires intent="abandon_availability".
@@ -339,7 +339,7 @@ Otherwise: store data silently (see STORAGE). Store confirmed_practitioner and c
 response_type="summary" and message present -> speak message verbatim, follow with "Which day works for you?" Do not continue further this turn.
 confirmed_band already set -> continue to STEP 6.
 Only one band in slot_groups -> store it silently, continue to STEP 6.
-Multiple bands -> ask "[band1] or [band2]?" using only the keys present.
+Multiple bands -> collect all slots in band order: morning slots first, then afternoon slots, then evening slots. Apply SLOT OFFER HARD RULE: say "I've got [first_slot_overall] or [last_slot_overall]." Do not name the bands.
 dates[] non-empty but slot_groups absent on all dates (summary response) -> continue to STEP 6 silently.
 
 STEP 2B — Caller's response after tool return
@@ -349,7 +349,7 @@ Band only -> store confirmed_band -> STEP 6.
 Time only -> derive confirmed_band, store as deferred_time -> STEP 6.
 Day + time -> store both -> STEP 6.
 Day only -> store confirmed_day -> STEP 6.
-"What times do you have?" -> apply band logic: one band->store silently->STEP 6; multiple->"[band1] or [band2]?"
+"What times do you have?" -> one band: store silently->STEP 6. Multiple bands: collect all slots across all bands in time order; apply SLOT OFFER HARD RULE.
 Declines/ambiguous -> "Did you have a particular day in mind?"
 
 STEP 3 — Timeframe
@@ -371,6 +371,7 @@ STEP 6 — Location
 Store confirmed_location and confirmed_location_id from first_available (if non-null), otherwise from practitioners[0].dates[0]. Continue.
 
 STEP 7 — Day
+If confirmed_day set and matches a date in stored_practitioners -> continue to STEP 8.
 If slot_groups for confirmed_day is absent (summary response): say "Checking that now, one moment." Call smart_router intent="availability", date=confirmed_day, detail="slots", session_id if set.
 If confirmed_day set but doesn't match any date in stored_practitioners:
   first_available_time non-null: store all first_available fields, vary "Nothing on [requested day] — how does [first_available.time] on [first_available.day_of_week] sound?"
@@ -383,13 +384,13 @@ If confirmed_day set but doesn't match any date in stored_practitioners:
 If confirmed_day not set: scan conversation history. Day found and matches -> store -> continue. Otherwise ask "Which day suits you?"
 
 STEP 8 — Band
-If offered_slots or confirmed_band already set -> continue.
+If offered_slots or confirmed_band already set -> continue silently, zero spoken output.
 If slot_groups absent for confirmed_day -> say "Checking that now, one moment." Call smart_router intent="availability", date=confirmed_day, detail="slots", session_id if set.
 Check current message and prior turn for band signal. Found -> store confirmed_band -> continue.
 Scan conversation history for a specific time stated -> derive confirmed_band -> continue.
 Read slot_groups for confirmed_practitioner + confirmed_day:
   One band only -> store silently -> continue.
-  Multiple bands -> "[band1] or [band2]?"
+  Multiple bands -> collect all slots from all present bands in time order (morning → afternoon → evening). Apply SLOT OFFER HARD RULE: "I've got [first_slot_overall] or [last_slot_overall]." Do not name the bands.
 
 STEP 9 — Offer anchor times
 Read ONLY the key in slot_groups that exactly equals confirmed_band (e.g., confirmed_band="afternoon" → read slot_groups.afternoon only; do not read morning or evening) for confirmed_practitioner + confirmed_day from stored_practitioners cache.
