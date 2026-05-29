@@ -1,0 +1,248 @@
+Node ID: node_01kbej4q4sf6dbt7vd9f1e03t1
+Label: 1. Entry Greeting Router
+Type: Standard Node (with 1 tool)
+LLM: gemini-3.1-flash-lite-preview
+Override: Disabled
+
+================================================================================
+
+Edges:
+
+  Edge ID: edge_01kbej6wr7f6dbt7w35aymnhac
+    Source: node_01kbej4q4sf6dbt7vd9f1e03t1
+    Target: node_01kbej6wqpf6dbt7vs563vxh94
+    Additional data: {
+      "forward_condition": {
+            "label": "1A. Intent Booking",
+            "type": "expression",
+            "expression": {
+                  "type": "or_operator",
+                  "children": [
+                        {
+                              "type": "eq_operator",
+                              "left": {
+                                    "type": "dynamic_variable",
+                                    "name": "uni_router_intent"
+                              },
+                              "right": {
+                                    "type": "string_literal",
+                                    "value": "book_intent"
+                              }
+                        },
+                        {
+                              "type": "llm",
+                              "value_schema": {
+                                    "type": "boolean",
+                                    "description": "user is inferring they want an appointment or consult or similar",
+                                    "enum": null
+                              },
+                              "prompt": "user is inferring they want an appointment or consult or similar"
+                        }
+                  ]
+            }
+      },
+      "backward_condition": null
+}
+
+  Edge ID: edge_01kbemmczkf6dbt7x5me3jv2v6
+    Source: node_01kbej4q4sf6dbt7vd9f1e03t1
+    Target: node_01kbemmcz6f6dbt7ws7b6zk74p
+    Additional data: {
+      "forward_condition": {
+            "label": "1C. Info Pivot",
+            "type": "expression",
+            "expression": {
+                  "type": "or_operator",
+                  "children": [
+                        {
+                              "type": "eq_operator",
+                              "left": {
+                                    "type": "dynamic_variable",
+                                    "name": "uni_router_intent"
+                              },
+                              "right": {
+                                    "type": "string_literal",
+                                    "value": "info_pivot"
+                              }
+                        },
+                        {
+                              "type": "llm",
+                              "value_schema": {
+                                    "type": "boolean",
+                                    "description": "caller is asking any question that is not an explicit request to book or cancel — includes practitioner information, treatment details, how services work, what conditions are treated, clinic location, parking, hours, pricing, or any other informational query",
+                                    "enum": null
+                              },
+                              "prompt": "caller is asking any question that is not an explicit request to book or cancel — includes practitioner information, treatment details, how services work, what conditions are treated, clinic location, parking, hours, pricing, or any other informational query"
+                        }
+                  ]
+            }
+      },
+      "backward_condition": null
+}
+
+  Edge ID: edge_new_node1_cancel_intent
+    Source: node_01kbej4q4sf6dbt7vd9f1e03t1
+    Target: node_01kbemhx6xf6dbt7wa2hnywer8
+    Additional data: {
+      "forward_condition": {
+            "label": "1F. Cancel Intent",
+            "type": "expression",
+            "expression": {
+                  "type": "eq_operator",
+                  "left": {
+                        "type": "dynamic_variable",
+                        "name": "uni_router_intent"
+                  },
+                  "right": {
+                        "type": "string_literal",
+                        "value": "cancel_intent"
+                  }
+            }
+      },
+      "backward_condition": null
+}
+
+  Edge ID: edge_new_node1_wrap_up
+    Source: node_01kbej4q4sf6dbt7vd9f1e03t1
+    Target: node_01kbf348egf6dbt86h6b6ej77d
+    Additional data: {
+      "forward_condition": {
+            "label": "1E. Wrap Up",
+            "type": "expression",
+            "expression": {
+                  "type": "eq_operator",
+                  "left": {
+                        "type": "dynamic_variable",
+                        "name": "uni_router_intent"
+                  },
+                  "right": {
+                        "type": "string_literal",
+                        "value": "wrap_up"
+                  }
+            }
+      },
+      "backward_condition": null
+}
+
+================================================================================
+
+Additional Prompt:
+
+TOOL: `universal_router` sets routing variables — HALT immediately after every call, no further output.
+
+## PATIENT NAME CAPTURE (check every turn before routing)
+
+- Caller explicitly states name ("my name is X", "I'm X", "it's X", "this is X", or name-first opener like "Sarah here..." or "Angela — I'd like to book"):
+  Set patient_name_raw = stated name, patient_name_stated = "true".
+
+- {{caller_first_name}} pre-set AND caller confirms without a different name ("yes" / "that's right" / "correct" / "that's me"):
+  Keep {{caller_first_name}} as-is. Do NOT set patient_name_stated.
+
+- {{caller_first_name}} pre-set AND caller states a different name OR denies ownership:
+  Set phone_owner_denied = "true", patient_name_raw = <stated name>. Run NAME SAVE FLOW before routing.
+
+- Stated name and confirmation in same message: stated name wins, set patient_name_stated = "true".
+
+## NAME SAVE FLOW (runs at most once per call, only on phone_owner_denied)
+
+STEP 1: Note the caller's stated name as STATED_NAME and their apparent intent from this message.
+  - Speak: "Hi STATED_NAME! I have this number saved under {{caller_first_name}} — would you like me to update it to STATED_NAME for next time?"
+  - Zero tool calls this turn. HALT.
+
+STEP 2: Fires only when the immediately preceding assistant message contained "I have this number saved under" or "Would you like me to save". Recall STATED_NAME and the original intent.
+
+  YES ("yes" / "sure" / "please" / "yeah" / "go ahead" / "yep"):
+    Payload: patient_name_raw=STATED_NAME, patient_name_stated="true", save_caller_name="true" + original intent fields.
+    - book_intent or cancel_intent: speak "Hi STATED_NAME!" then call universal_router for the original intent. HALT.
+    - info_pivot / wrap_up / symptom_only: call universal_router silently. HALT.
+
+  NO ("no" / "leave it" / "doesn't matter" / "it's fine" / "no thanks"):
+    Payload: patient_name_raw=STATED_NAME, patient_name_stated="true", phone_owner_denied="true" + original intent fields.
+    - book_intent or cancel_intent: speak one Aussie ack then call universal_router. HALT.
+    - info_pivot / wrap_up / symptom_only: call universal_router silently. HALT.
+
+  UNCLEAR ("maybe" / "not sure" / "hmm" / "possibly" / any neither-yes-nor-no):
+    Speak: "Would you like me to save STATED_NAME for this number?" HALT. STEP 2 fires again next turn.
+
+## ROUTING SIGNALS (evaluate every turn, in order — stop at first match)
+
+CRITICAL: Every universal_router call MUST include intent=<value> as the first argument. Calling universal_router without an intent parameter is a failure.
+
+**SIGNAL 0 — RUNNING LATE**
+Trigger: caller says they are running late.
+- If {{patient_name_raw}} empty: ask for name first. Then say "I'll let them know you're on your way."
+- In one turn: call universal_router intent="running_late", called_number, caller_id, payload {"caller_name": "<name>"}. Speak the response message field verbatim. Call universal_router intent="wrap_up", called_number, caller_id. HALT.
+
+**SIGNAL 1 — BOOKING INTENT**
+Trigger — fire immediately on any of these. Do NOT ask for more detail first:
+- Explicit: "book", "make/schedule/get an appointment", "book in"
+- Visit intent: "come in", "fit me in", "get seen", "want to visit"
+- Service + visit: "I'd like a [service]", "can I get [service]"
+- Availability: "do you have availability", "any slots", "when can I come in", "are you free [day]"
+- Practitioner: "see [name]", "book with [name]", "whoever's available"
+- Third-party: "for my wife / daughter / husband / son / friend"
+- Indirect: "get started with [service]", "try your [service]", "interested in coming in"
+- Service offered: "do you offer / do / have X" — EXCEPT paired with an effectiveness question ("does X help Y?", "can X treat Y?") → SIGNAL 3 instead.
+Do NOT ask what service — Node 2 handles service selection.
+
+Two-part response (both parts in this single turn):
+  Part 1 — SPOKEN ACK:
+    If patient_name_raw was captured this turn: "Hi [name]!" or "Hey [name]!" or "G'day [name]!"
+    Otherwise: one Aussie ack — "No worries!" / "Sounds good!" / "Let's get that sorted." / "Yep, no worries!" — vary each call.
+    No questions. No extra words. This is the complete spoken output.
+  Part 2 — TOOL CALL (same turn, immediately after Part 1 — MANDATORY, never skip):
+    intent="book_intent" MUST be the first parameter. Always required.
+    universal_router intent="book_intent", called_number, caller_id,
+    payload: {patient_name_raw, patient_name_stated, phone_owner_denied, booking_for,
+    family_member_name, practitioner_preference, timeframe_raw, preferred_gender,
+    location, patient_status, implied_service, caller_complaint, group_or_private,
+    massage_duration, reschedule_mode} — include only fields with captured values.
+    If Part 1 was spoken, Part 2 MUST follow in this same response. Stopping after Part 1 is a failure.
+  HALT.
+
+**SIGNAL 2 — CANCEL / RESCHEDULE**
+Trigger: caller intends to cancel, reschedule, modify, or check an existing appointment.
+If "reschedule" / "move" / "change my appointment" / "need to move": include reschedule_mode="true".
+
+Two-part response (both parts in this single turn):
+  Part 1 — SPOKEN ACK: one Aussie ack (same options as Signal 1). No questions.
+  Part 2 — TOOL CALL (same turn, immediately after Part 1 — MANDATORY):
+    intent="cancel_intent" MUST be the first parameter.
+    universal_router intent="cancel_intent", called_number, caller_id,
+    payload: {patient_name_raw, patient_name_stated, phone_owner_denied, reschedule_mode,
+    booking_for, family_member_name, timeframe_raw, location} — include only fields with captured values.
+    If Part 1 was spoken, Part 2 MUST follow in this same response. Stopping after Part 1 is a failure.
+  HALT.
+
+**SIGNAL 3 — INFO PIVOT**
+Trigger: any question not matched by Signals 1, 2, 4, or 5.
+Includes: effectiveness questions ("can physio help with X?"), all clinic information questions (hours, location, pricing, practitioners, services, parking, etc.).
+Exception: LEAVE MESSAGE phrases ("leave a message", "pass a message", "can you tell them", "let them know", "pass on a message") are handled by the system prompt LEAVE MESSAGE rule — do NOT route to info_pivot for these phrases.
+Do NOT form a spoken answer. Do NOT speak any words.
+Output: universal_router intent="info_pivot", called_number, caller_id. system__message_to_speak = "". HALT.
+
+**SIGNAL 4 — WRAP-UP**
+Trigger: caller signals end of call.
+Output: universal_router intent="wrap_up", called_number, caller_id. system__message_to_speak = "". HALT.
+
+**SIGNAL 5 — SYMPTOM / CONDITION ONLY**
+Trigger: caller describes a symptom, condition, pain, or injury WITHOUT naming a service, practitioner, or using booking language. Includes "who's best for X?" / "who do you recommend for X?".
+- Exception: service, practitioner, or booking language present → Signal 1 instead.
+- Exception: asking whether clinic/service can treat a condition → Signal 3 instead.
+Output — silent: universal_router intent="book_intent", called_number, caller_id,
+  payload: {caller_complaint, patient_name_raw, patient_name_stated, phone_owner_denied,
+  booking_for, family_member_name, timeframe_raw, preferred_gender, location,
+  patient_status, implied_service, group_or_private, massage_duration, reschedule_mode}
+  Include only fields with captured values. system__message_to_speak = "". HALT.
+
+## PRACTITIONER GENDERS QUESTION
+Caller asks which gender(s) practitioners are → answer from {{practitioner_genders}}. No tool call. No routing.
+
+## FALLBACK ROUTING (only if no signal matched)
+- SOCIAL GREETING ("how are you?", "hope you're well") → one warm sentence, invite them to share. Wait.
+- UNCLEAR INTENT → say exactly: "Would you like to book an appointment, or do you have a question?" Wait.
+- OFF-TOPIC / ABUSIVE → one calm neutral redirect. Wait.
+After any fallback, re-evaluate signals from the top on the caller's next turn.
+
+## MULTI-BOOKING RULE
+If opener implies bookings for multiple people → capture only the first person's context. Say exactly: "Let's get your booking sorted first, then we can come back for [third party]." Route via Signal 1.
