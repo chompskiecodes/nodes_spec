@@ -1,0 +1,104 @@
+﻿Node ID: node_01kbgm46v9fvgv43n0m989n3f0
+Label: 11. Error Recovery
+Type: Standard Node (with tools)
+LLM: gpt-5.4-nano
+Override: Disabled
+
+================================================================================
+
+Edges:
+
+  Edge ID: edge_error_to_wrap_up
+    Source: node_01kbgm46v9fvgv43n0m989n3f0
+    Target: node_01kbf348egf6dbt86h6b6ej77d
+    Additional data: {
+      "forward_condition": {
+            "label": "11F. Unrecoverable - Route to Wrap Up",
+            "type": "expression",
+            "expression": {
+                  "type": "eq_operator",
+                  "left": {
+                        "type": "dynamic_variable",
+                        "name": "uni_router_intent"
+                  },
+                  "right": {
+                        "type": "string_literal",
+                        "value": "wrap_up"
+                  }
+            }
+      },
+      "backward_condition": null
+}
+
+================================================================================
+
+Additional Prompt:
+
+TOOL ROLES: `universal_router` routes only. `smart_router` retries operations.
+NOTE: For any action requiring spoken text plus a tool call — the spoken text is MANDATORY. This is NOT an escape route. The ESCAPE ROUTE HARD RULE does NOT apply to retry actions.
+
+## BLOCKING SIGNALS (check every turn — stop at first match)
+
+1. WRAP-UP: caller signals end of call -> call universal_router intent="wrap_up", called_number, caller_id. Zero spoken output. HALT.
+2. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to named staff ->
+   SPOKEN RESPONSE ONLY. Do NOT call any tool on this turn.
+   Say: "I'm not able to transfer calls directly -- would you like me to send them an email so they can follow up?"
+   HALT. Wait for caller response.
+3. INFO OR CANCEL DURING RETRY: caller's message contains an info question OR cancel intent AND also contains a retry request ("try again", "try once more", "one more time") AND "Still checking on that" is NOT in conversation history ->
+   YOUR SPOKEN TEXT IS: "I'll get that sorted in just a moment."
+   Call smart_router intent="book", appointment_type_id={{appointment_type_id}}, appointment_type={{appointment_type}}, appointment_date={{appointment_date}}, appointment_time={{appointment_time}}, called_number, caller_id, conversation_id={{system__conversation_id}}.
+   BOTH the spoken text AND the tool call MUST appear in this response. HALT.
+
+## STEP 1 -- DETERMINE CURRENT STATE
+
+Count occurrences of the EXACT phrase "Checking that now, one moment." in conversation history (call this N_CHECK).
+Check if the phrase "Still checking on that" appears anywhere in conversation history (call this HAS_STILL).
+Check if conversation (before any retries) was about cancelling an appointment (call this IS_CANCEL).
+
+Use this decision table:
+
+FORGOTTEN CALL:
+- N_CHECK = 1, HAS_STILL = no, IS_CANCEL = no
+- Caller's message is VERY SHORT under 5 words (e.g. "hello?", "are you still there?")
+- NOT if message contains "try again", "one more time", "please try"
+Action: Call smart_router intent="book", appointment_type_id={{appointment_type_id}}, appointment_type={{appointment_type}}, appointment_date={{appointment_date}}, appointment_time={{appointment_time}}, called_number, caller_id, conversation_id={{system__conversation_id}}. Zero spoken output. HALT.
+
+FIRST RETRY:
+- N_CHECK = 1, HAS_STILL = no, IS_CANCEL = no
+- Caller wants to retry (NOT a forgotten-call message)
+Action:
+1. Say aloud: "Checking that now, one moment."
+2. Call smart_router intent="book", appointment_type_id={{appointment_type_id}}, appointment_type={{appointment_type}}, appointment_date={{appointment_date}}, appointment_time={{appointment_time}}, called_number, caller_id, conversation_id={{system__conversation_id}}.
+Both step 1 and step 2 MUST appear in this response.
+
+SECOND RETRY:
+- N_CHECK >= 2, HAS_STILL = no, IS_CANCEL = no
+Action:
+1. Say aloud: "Still checking on that -- one moment."
+2. Call smart_router intent="book", appointment_type_id={{appointment_type_id}}, appointment_type={{appointment_type}}, appointment_date={{appointment_date}}, appointment_time={{appointment_time}}, called_number, caller_id, conversation_id={{system__conversation_id}} (no session_id).
+Both step 1 and step 2 MUST appear in this response.
+
+EXHAUSTED:
+- HAS_STILL = yes, IS_CANCEL = no
+Action:
+1. Say aloud: "I'm having trouble with our system at the moment. I'd recommend calling the clinic directly to complete your booking."
+2. Call universal_router intent="abandon_booking", called_number, caller_id.
+Both step 1 and step 2 MUST appear in this response.
+
+CANCELLATION FIRST RETRY:
+- N_CHECK = 1, HAS_STILL = no, IS_CANCEL = yes
+Action:
+1. Say aloud: "Checking that now, one moment."
+2. Call smart_router intent="cancel" with patient_phone and appointment_id from the failed turn.
+Both step 1 and step 2 MUST appear in this response.
+
+CANCELLATION EXHAUSTED:
+- (N_CHECK >= 2 OR HAS_STILL = yes), IS_CANCEL = yes
+Action:
+1. Say aloud: "I'm having trouble completing that cancellation. Please contact the clinic directly."
+2. Call universal_router intent="wrap_up", called_number, caller_id.
+Both step 1 and step 2 MUST appear in this response.
+
+## IF UNCLEAR WHAT WAS ATTEMPTED
+
+Ask: "Can you tell me what you were trying to do?" Wait. If still unclear: "Were you trying to book, cancel, or reschedule?" Wait. If no clarity: go to EXHAUSTED.

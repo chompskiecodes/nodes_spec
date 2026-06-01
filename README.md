@@ -27,9 +27,9 @@ Every clinic agent uses these same node IDs:
 | 3 (availability) | `claude-sonnet-4-5` | All clinics; P1/P2/P3 templates in `node3_templates/`; Haiku hallucinated slot times |
 | 6a/6b/6c (name collect) | `claude-haiku-4-5` | |
 | 7 (cancellation) | `claude-haiku-4-5` | |
-| 7b (rescheduler) | `gemini-2.5-flash` | Simpler flow |
+| 7b (rescheduler) | `gpt-5.4-nano` | Migrated 2026-05-29; 10/10 scaffold tests |
 | 8 (information) | `claude-haiku-4-5` | |
-| 9 (wrap up) | `gemini-2.5-flash` | Simpler flow |
+| 9 (wrap up) | `gpt-5.4-nano` | Migrated 2026-05-29; 12/13 scaffold tests (D1 scaffold artifact) |
 | 11 (error recovery) | `gemini-3.1-flash-lite-preview` | Cheapest/fastest |
 | 2C (complaint intake) | `claude-haiku-4-5` | |
 
