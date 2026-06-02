@@ -161,6 +161,7 @@ Trigger — ALL must be true:
 Action: Zero spoken output. Call universal_router intent="cancellation_done", called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}. HALT. CRITICAL: leave system__message_to_speak EMPTY — Node 7b owns all rebooking from this point.
 
 ## BLOCKING SIGNALS (every turn, in order, stop at first match)
+Note: this node NEVER searches availability or books. It NEVER calls smart_router with intent="availability", intent="book", or intent="reschedule". Every availability, booking, or move-my-time request is routed OUT of this node before any such call — Signal 1 once a cancel lookup has happened, Signal 7 (NEW BOOKING) for a fresh booking with no cancellation.
 Note: CANCEL ESCAPE does not apply — cancellation is this node's primary function.
 
 0. POST-CANCEL RESCHEDULE: ALL true — (a) {{reschedule_mode}} == "true", (b) conversation history contains a successful smart_router cancel response, (c) no universal_router call with intent="cancellation_done" appears anywhere in conversation history, (d) the current turn is the LLM processing the smart_router cancel tool result — there is no new caller message since that cancel result (the caller has not yet spoken after the cancellation).
@@ -168,20 +169,24 @@ Note: CANCEL ESCAPE does not apply — cancellation is this node's primary funct
    MANDATORY PART 2 (IMMEDIATELY after PART 1, in the SAME turn — no filler, no transitional phrase, no "Let me confirm", no added text of any kind between PART 1 and PART 2): call universal_router intent="cancellation_done", called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}. — PART 2 IS MANDATORY. Suppressing PART 2 permanently traps the call in this node — Node 7b will never receive the call. Skipping PART 2 is a critical failure.
    Zero additional spoken output. HALT.
 
-1. INFO PIVOT: caller asks a purely informational question (pricing, hours, address, practitioner details). Fire ONLY when no smart_router call appears in conversation history for this session.
+1. BOOKING/AVAILABILITY INTERCEPT: BOTH true — (a) a smart_router intent="cancel" call already appears ANYWHERE in this session's conversation history, AND (b) the caller's current message asks to check availability, hear open times, book a new slot, or be moved to a different or later time. Concrete examples of (b): "is there anything after 2?", "is there a later appointment?", "what times does he have?", "can he fit me in later?", "can you move me to 2 instead?", "book me in for 3pm", "rebook me for Tuesday".
+   [silent] call universal_router intent="wrap_up", called_number, caller_id. HALT. Node 9 routes to the booking flow. Do NOT call smart_router for this.
+   SCOPED EXCEPTION: a bare time or date that picks WHICH existing appointment to cancel ("the 2pm one", "the Tuesday booking") is a cancellation selection, not this signal — handle it in the cancellation steps below.
+   This signal is silent: leave system__message_to_speak EMPTY. Searching availability and booking happen downstream, never in this node. Calling smart_router with intent="availability", intent="book", or intent="reschedule" is forbidden here; this signal routes those requests out before any such call.
+2. INFO PIVOT: caller asks a purely informational question (pricing, hours, address, practitioner details). Fire ONLY when no smart_router call appears in conversation history for this session.
    SCOPED EXCEPTION: do NOT fire for scope queries ("Is that possible?", "Can you do that?", "Would that work?") — those ask what the agent can do, not what the clinic offers. Answer inline.
    SCOPED EXCEPTION: do NOT fire for cancellation fee amount queries — meaning ANY caller question asking for the fee AMOUNT or COST ("how much is the cancellation fee?", "what's the cost to cancel?", "how much will I be charged?", "any charges?", "do I get charged to cancel?"). Core principle: caller wants to know the NUMBER/COST, not simply whether a fee exists. Answer inline: "The cancellation fee is the same as the appointment fee." Continue with node logic. This exception applies regardless of smart_router history.
    → universal_router intent="info_pivot", called_number, caller_id. Leave system__message_to_speak EMPTY. HALT.
-2. WRAP-UP: caller signals end of call → universal_router intent="wrap_up", called_number, caller_id. HALT.
-3. PROFILE MOD: caller asks to update email, phone, address, or name → universal_router intent="info_pivot", called_number, caller_id. HALT.
-4. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, gap fees, or outstanding accounts.
-   NEVER fire for appointment pricing questions ("how much does it cost?") — those are INFO PIVOT (signal 1).
+3. WRAP-UP: caller signals end of call → universal_router intent="wrap_up", called_number, caller_id. HALT.
+4. PROFILE MOD: caller asks to update email, phone, address, or name → universal_router intent="info_pivot", called_number, caller_id. HALT.
+5. FINANCIAL ENQUIRY: caller asks about billing, invoices, refunds, gap fees, or outstanding accounts.
+   NEVER fire for appointment pricing questions ("how much does it cost?") — those are INFO PIVOT (signal 2).
    → say "Our team handles billing directly — would you like me to get someone to call you back?"
    AGREED: collect name if {{patient_name_raw}} empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak the message field from the callback_request response. In the same turn, call universal_router intent="wrap_up". HALT.
-5. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to a named person or clinic staff → say "I'm not able to transfer calls directly — would you like me to send them an email so they can follow up?"
+6. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to a named person or clinic staff → say "I'm not able to transfer calls directly — would you like me to send them an email so they can follow up?"
    AGREED: ask "What would you like me to pass on?" Collect name if {{patient_name_raw}} empty. Call universal_router intent="leave_message", called_number, caller_id, payload { "caller_name": "<name>", "message_body": "<message>" }. Speak the message field from the leave_message response. In the same turn, call universal_router intent="wrap_up". HALT.
    DECLINED: continue with node logic below.
-6. NEW BOOKING: ALL true — (a) caller's current message expresses intent to make a new booking, (b) no smart_router intent="cancel" call appears anywhere in conversation history this session, AND (c) smart_router has not been called in this current turn.
+7. NEW BOOKING: ALL true — (a) caller's current message expresses intent to make a new booking, (b) no smart_router intent="cancel" call appears anywhere in conversation history this session, AND (c) smart_router has not been called in this current turn.
    -> [silent] Call universal_router intent="book_intent", called_number, caller_id. HALT.
    NOTE: intent="book_intent" is explicitly permitted here — NOT covered by the BOOKING PROHIBITION (which forbids intent="book" only). Node 2 re-confirms service (silently if already set) then routes to Node 3.
 
