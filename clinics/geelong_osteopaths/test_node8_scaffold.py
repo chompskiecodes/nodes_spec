@@ -51,7 +51,7 @@ CLINIC = "geelong_osteopaths"
 UNIVERSAL_ROUTER_TOOL_ID = "tool_9401k7e4bc90fw7avkmysavqhj91"
 SMART_ROUTER_TOOL_ID     = "tool_4501k96qzckzemabz9rwppjms6zj"
 
-SCAFFOLD_LLM       = "claude-haiku-4-5"
+SCAFFOLD_LLM       = "gpt-4.1"
 POLL_INTERVAL_SECS = 12
 POLL_TIMEOUT_SECS  = 360
 
