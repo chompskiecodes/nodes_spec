@@ -296,7 +296,7 @@ Fix rule: Sharpen trigger with concrete examples. Keep the condition genuinely c
 
 ## Haiku instruction-following — what works and what breaks
 
-> **Node 3 is now `claude-sonnet-4-5` (2026-05-22).** These patterns apply to remaining Haiku nodes: Node 2, 6a/6b/6c, 7, 7b, 8, 11. Do not apply them when editing Node 3 Sonnet templates — Sonnet follows instructions without this scaffolding.
+> **Node 3 is now `gpt-4.1` (2026-06-04).** These patterns apply to remaining Haiku nodes: Node 2, 6a/6b/6c, 7, 7b, 8, 11. Do not apply them when editing Node 3 gpt-4.1 templates — gpt-4.1 uses its own structural patterns (SCOPE CLASSIFICATION, per-object extraction, explicit Stop markers).
 
 ### WHAT WORKS
 
