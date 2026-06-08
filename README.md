@@ -29,7 +29,7 @@ Every clinic agent uses these same node IDs:
 | 7 (cancellation) | `claude-haiku-4-5` | |
 | 7b (rescheduler) | `gpt-5.4-nano` | Migrated 2026-05-29; 10/10 scaffold tests |
 | 8 (information) | `gpt-4.1` | Migrated from claude-haiku-4-5 2026-06-04; 92/100 GPT-4.1 self-audit vs 72/100 Haiku; fleet structural improvements applied |
-| 9 (wrap up) | `gpt-5.4-nano` | Migrated 2026-05-29; 12/13 scaffold tests (D1 scaffold artifact) |
+| 9 (wrap up) | `gpt-5.4-mini` | nano rejected 2026-06-06: D1 silent farewell (real failure, not scaffold artifact) + R1 intent misclassification; 11/13 |
 | 11 (error recovery) | `gemini-3.1-flash-lite-preview` | Cheapest/fastest |
 | 2C (complaint intake) | `claude-haiku-4-5` | |
 
