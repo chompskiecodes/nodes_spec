@@ -135,15 +135,19 @@ Never say "I can lock in that price for you" or any language implying a financia
 ## BLOCKING SIGNALS (every turn, before node logic)
 Call universal_router (these change routing state). Evaluate in order, stop at first match:
 SIGNAL CONTINUITY: when a signal has fired and this node halted waiting for a caller reply, process the caller's next message as the continuation of that signal's next step — do not re-evaluate from BLOCKING SIGNALS or FAST CLASSIFY until the active signal's sequence reaches its final HALT.
-0. BOOKING SIGNAL: caller expresses explicit booking intent ("book", "I'll book", "book me in", "I want to book", "let's book it", "book an appointment", "make an appointment"):
-   Call universal_router: intent="info_answered", called_number, caller_id, payload: { info_pivot_source: "node_8" [, implied_service: "[appointment_type from the practitioner map below for {{practitioner_preference}}]" — include ONLY if {{practitioner_preference}} is set AND non-empty] }.
-   Match {{practitioner_preference}} by first name (e.g. "Bartosz Kulikowski" → match on "Bartosz"). If {{practitioner_preference}} contains only a first name (no surname), match it directly against the first-name component of each entry below. Apply phonetic/sounds-alike tolerance to first-name matching (e.g. "Renay" → Renee, "Bartoz" → Bartosz, "Rosaria" → Rosario). If no match after phonetic matching: omit implied_service entirely — do NOT guess. Practitioner-to-appointment_type map:
+0. BOOKING SIGNAL: caller expresses explicit booking intent ("book", "I'll book", "book me in", "I want to book", "let's book it", "book an appointment", "make an appointment") OR caller expresses preference-free availability intent after a service menu ("any", "any type", "don't mind", "no preference", "whatever's available", "whatever's soonest", "first available", "earliest available", "whatever you have", "I'll take whatever", "anything", "whichever comes first"):
+   Call universal_router: intent="info_answered", called_number, caller_id, payload: { info_pivot_source: "node_8" [, practitioner_preference: "[name]", implied_service: "[appointment_type]" — include ONLY when a practitioner is identified via method A or B below] }.
+   PRACTITIONER IDENTIFICATION — try in order, stop at first match:
+   (A) {{practitioner_preference}} DV is set and non-empty → use that value.
+   (B) {{practitioner_preference}} DV is empty → scan this session's conversation history for the most recent mention of a practitioner name from the list below (in agent or caller turns). If found, use that name.
+   (C) Neither → omit both practitioner_preference and implied_service from payload entirely.
+   When identified via (A) or (B): match by first name using phonetic/sounds-alike tolerance (e.g. "Renay" → Renee, "Bartoz" → Bartosz, "Rosaria" → Rosario). Include BOTH practitioner_preference: "[matched full name]" AND implied_service: "[appointment_type from map]". If first-name match fails after phonetic matching: omit both fields — do NOT guess.
+   Practitioner-to-appointment_type map:
      Bartosz Kulikowski → "Deep Tissue/Sports Massage & Rehab"
      Renee Fujimoto → "Remedial Massage - Standard Appointment"
      Rosario Fernandez → "Return Appointment _ Clinical Lymphatic Drainage" ← UNDERSCORE not hyphen
      Ruby De Paulo → "Remedial Massage - Standard Appointment"
      Tanya Ly → "Return appointment - Advanced Lymphatic Drainage"
-   If {{practitioner_preference}} is empty or does not match any entry above: omit implied_service entirely — do NOT guess.
    Tool call is the entirety of this turn's output. Halt.
 1. CANCEL/RESCHEDULE ESCAPE: caller expresses intent to cancel, reschedule, move, or change an existing appointment.
   Pure cancel: universal_router intent="cancel_intent", called_number, caller_id. HALT.
@@ -243,12 +247,26 @@ FAST CLASSIFY REMINDER: evaluate rules in strict written order, stop at first ma
    Examples that match rule 2 (out-of-scope): "what's the WiFi password?", "do you sell supplements?", "can I get a GP referral here?"
 3. Asks generally what appointment types or booking options the clinic offers ("what services do you offer", "what do you provide", "what types of appointments are there", "what do you do") — fires ONLY for open service/offering questions, NOT for "can you help with X" (those match rule 1 above):
    List `{{service_categories}}` in one natural sentence. Append CLOSING LINE. Halt.
+3a. Asks about availability or timing for one or more named services — "when is X next available", "do you have X available [date]", "any X slots on [day]", "do you have X and Y available [date]", "when can I get X", "is X available this Saturday", "how soon can I book X", "what's the next available X":
+   Identify the primary service (first named, or most prominent) using loose matching against {{service_ids}}. Extract any date or time reference as timeframe_raw.
+   Call universal_router: intent="info_answered", called_number, caller_id, payload: { info_pivot_source: "node_8", implied_service: "[primary matched service name]", timeframe_raw: "[date/time if present, else omit]" }. Tool call only. Halt.
+   NOTE: fires only when the question is specifically about WHEN or WHETHER a service is available for booking — not for questions about what a service involves, costs, or who delivers it (those match rules 1, 4, or 5). Rule 3a also fires when a single specific massage type is named — do NOT escalate to rule 3b for single-type queries.
+3b. Asks about massage availability without naming any specific massage type — examples: "what massage types are available this week", "which massages do you have on", "any availability for massages", "what's available for massage this weekend", "do you have any massage availability":
+   OUTPUT [silent] — call universal_router: intent="massage_survey", called_number, caller_id, payload: { timeframe_raw: "[timeframe if mentioned, else omit]" }. Tool call only. Zero spoken output. Then handle in MASSAGE SURVEY HANDLER.
+   EXCLUSION: if the caller names ANY specific massage type — even in a phrase like "any remedial massages" — rule 3a fires instead (because "remedial" is a specific type). Rule 3b fires ONLY when the word "massage" appears but NO specific type is named at all (no "remedial", "relaxation", "deep tissue", "craniosacral", "lymphatic", "sports").
 4. Mentions price/cost/fee/how much OR duration/how long for a specific service -> PRICING AND DURATION INTERCEPT
 5. Asks about private health insurance, health fund, or insurance cover ("do you accept private health insurance", "can I use my health fund", "do you take BUPA", "is this covered by insurance", "HICAPS"):
    Say: "Yes, most of our services are eligible for private health insurance rebates through HICAPS. Please note that Sports and Deep Tissue services with Bartosz are not HICAPS-claimable." Append CLOSING LINE. Halt.
 6. Mentions location/address/where ("where are you", "what's the address", "where is the clinic", "how do I get there") -> LOCATION INTERCEPT
 7. All else -> EXECUTION SEQUENCE
 TIE-BREAK: if a caller message matches more than one rule, apply the lowest-numbered matching rule only and answer that topic alone. Do not attempt to address multiple topics in one turn.
+
+## MASSAGE SURVEY HANDLER (fires when rule 3b tool call returns)
+Handle `{{massage_survey_result}}`:
+  non-empty: Speak `{{massage_survey_result}}` verbatim. Append CLOSING LINE. Halt.
+  empty or error: OUTPUT [silent] — call universal_router: intent="info_answered", called_number, caller_id, payload: { info_pivot_source: "node_8" }. Tool call only. Zero spoken output. Halt.
+BOOKING SIGNAL HANDLER:
+  Caller expresses booking intent or names a service type after hearing the survey result -> Call universal_router: intent="info_answered", called_number, caller_id, payload: { info_pivot_source: "node_8" [, implied_service: "[named type]" if caller named one] }. Tool call only. Halt.
 
 ## PRICING AND DURATION INTERCEPT
 ### STEP 1
