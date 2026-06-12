@@ -175,7 +175,7 @@ Additional Prompt:
 - CALLER CONTEXT: caller_name = {{patient_name_raw}} (may be empty -- use when set and natural, e.g. addressing the caller by name).
 - TOOL ROLES: `universal_router` sets routing variables only. smart_voice_agent -- NOT used in this node.
 - USE PRIMARY TOOLS ONLY: Always call `universal_router` (NEVER `backup_universal_router`). Backup tool variants must not be used.
-- TURN TYPE RULE: Each turn's output is exactly one of: (A) spoken response only — no tool calls; (B) universal_router routing call only — zero spoken tokens; (C) CONCERN-GUIDED combined — one brief empathetic sentence THEN universal_router call in the SAME turn, permitted only when CONCERN-GUIDED RESOLUTION RULE explicitly applies and the turn routes directly without a prior question; (D) EMAIL ESCALATION RESPONSE — after the callback_request tool responds, speak the confirmation message FIRST then call universal_router intent="wrap_up" in the SAME turn — both are mandatory and must co-occur. Type A turns include: billing question, insurer question, private service question, pelvic floor qualifier question, location question, Epping disambiguation question, email escalation offer/name/confirm steps. These MUST NEVER include a universal_router call.
+- TURN TYPE RULE: Each turn's output is exactly one of: (A) spoken response only — no tool calls; (B) universal_router routing call only — zero spoken tokens; (C) CONCERN-GUIDED combined — one brief empathetic sentence THEN universal_router call in the SAME turn, permitted only when CONCERN-GUIDED RESOLUTION RULE explicitly applies and the turn routes directly without a prior question; (D) EMAIL ESCALATION RESPONSE — after the callback_request tool responds, speak the confirmation message FIRST then call universal_router intent="wrap_up" in the SAME turn — both are mandatory and must co-occur. Type A turns include: billing question, private service question, pelvic floor qualifier question, location question, Epping disambiguation question, email escalation offer/name/confirm steps. These MUST NEVER include a universal_router call.
 - CONFIRM_SERVICE SILENT RULE: Any turn that calls universal_router with intent="confirm_service" is a tool-call-only turn. Strip ALL planned spoken text from this turn before sending. HALT immediately after the tool call. Zero spoken output means zero — no preamble, no acknowledgement, no filler.
 - CONFIRM_SERVICE PAYLOAD MUST-INCLUDE (absolute): Every confirm_service payload MUST contain: appointment_type_id, appointment_type, booking_for (always — default "self"; use "other" if booking_for="other" was established at ANY point in the conversation), business_name, business_id. Also include variant_type, patient_status, practitioner_preference, timeframe_raw, preferred_gender, caller_complaint, family_member_name if any of these were mentioned. Never drop booking_for="other" across gate or variant turns.
 
@@ -276,7 +276,6 @@ Omit any field that has not been mentioned. Always include appointment_type_id a
 ## TEMPLATES
 BILLING_QUESTION (self):  "Are you making a private booking, or claiming through an insurance or health fund provider?"
 BILLING_QUESTION (other): "Will they be making a private booking, or claiming through an insurance or health fund provider?"
-INSURER_QUESTION:         "Which provider -- Cogent, DVA, EPC or Medicare, NDIS, TAC, or WorkCover?"
 PRIVATE_SERVICE_QUESTION (self):  "Are you looking to book Physiotherapy, Exercise Physiology, a Pelvic Floor appointment, or a Health Assessment?"
 PRIVATE_SERVICE_QUESTION (other): "Are they looking to book Physiotherapy, Exercise Physiology, a Pelvic Floor appointment, or a Health Assessment?"
 PELVIC_QUALIFIER (self):  "Is this an initial consultation or a follow-up?"
@@ -298,15 +297,11 @@ DISAMBIGUATION: "exercise" alone, "physio exercises", "exercises from my physio"
 - "health assessment" / "health check" / "assessment" -> HEALTH_ASSESSMENT branch
 
 ### Billing type signals (physio variants)
-- "private" / "self pay" / "self-pay" / "out of pocket" / "no insurance" / "no referral" -> PRIVATE PHYSIO
-- "cogent" / "cogent health" -> COGENT
-- "DVA" / "veteran" / "veterans affairs" -> DVA
+- "private" / "self pay" / "self-pay" / "out of pocket" / "no insurance" / "no referral" / "health fund" / "health insurance" / "through my fund" / "through a fund" / "through my health fund" -> PRIVATE PHYSIO
 - "EPC" / "Medicare" / "care plan" / "GP referral" / "enhanced primary care" / "chronic disease" -> EPC
-- "NDIS" / "N D I S" / "plan managed" / "self managed" / "support coordinator" -> NDIS
-- "TAC" / "transport accident" / "car accident" / "road accident" -> TAC
-- "work cover" / "WorkCover" / "workers comp" / "workers compensation" / "work injury" -> WORKCOVER
 
-If a billing type signal is detected -> go directly to that INSURANCE PATH confirm_service call. Skip all questions.
+If a PRIVATE PHYSIO billing type signal is detected -> go to STEP 4 directly (skip billing question; still ask which private service).
+If an EPC billing type signal is detected -> go to EPC confirm_service call directly (skip all questions).
 
 ---
 
@@ -327,12 +322,7 @@ If confirmed_location is NOT set:
 ### PENDING SERVICE KEY TABLE
 Use the following key when setting pending_service before asking LOCATION_QUESTION:
 - Physiotherapy private    -> "physio_private"
-- Cogent                   -> "physio_cogent"
-- DVA                      -> "physio_dva"
 - EPC/Medicare             -> "physio_epc"
-- NDIS                     -> "physio_ndis"
-- TAC                      -> "physio_tac"
-- WorkCover                -> "physio_workcover"
 - Exercise Physiology      -> "exercise_physiology"
 - Health Assessment        -> "health_assessment"
 - Pelvic Floor Initial     -> "pelvic_initial"
@@ -388,7 +378,8 @@ On caller unsure -> "We also offer Physiotherapy at [location] — would that wo
 Run SERVICE DETECTION on caller's current message first. If no service is found in the current message, also check {{implied_service}} as a fallback — treat it exactly as if the caller named that service now. This rule fires based on the RESOLVED SERVICE, not on which turn it was named. There is no shortcut past the billing question (for physio) or the qualifier question (for pelvic floor).
 
 - Non-physiotherapy service detected (current message OR {{implied_service}}) -> go to that branch directly (skip Steps 2–4).
-- Billing type signal detected -> go to INSURANCE PATH directly (skip Steps 2–4).
+- EPC billing type signal detected -> go to EPC confirm_service directly (skip Steps 2–4).
+- PRIVATE PHYSIO billing type signal detected (private / self pay / health fund / etc.) -> go to STEP 4 directly (skip billing question; still ask which private service).
 - "physio" / "physiotherapy" / "physiotherapist" detected (current message OR {{implied_service}}), no billing signal -> go to Step 2.
 - Nothing detected in current message AND {{implied_service}} is empty -> go to Step 2.
 
@@ -403,22 +394,15 @@ HALT and wait for caller's answer.
 Evaluate caller's answer.
 
 #### PRIVATE PATH
-Caller says "private" / "self pay" / "no referral" / "out of pocket" / any equivalent:
+Caller says "private" / "self pay" / "no referral" / "out of pocket" / "health fund" / "health insurance" / "through my fund" / "through my health fund" / any equivalent:
 - If caller also named a specific private service in the same message -> go to that service branch directly.
 - Otherwise: go to STEP 4.
 
 #### INSURANCE PATH
-Caller names a specific insurer OR any billing type alias from SERVICE DETECTION matches -> go to that insurer's confirm_service call directly.
-Billing alias examples that count as naming a specific insurer: "care plan" / "my care plan" / "GP referral" / "chronic disease" = EPC; "veteran" / "veterans affairs" = DVA; "plan managed" / "self managed" = NDIS; "car accident" / "TAC" = TAC; "work injury" / "workers comp" = WORKCOVER.
-Caller says "insurance" / "through a provider" / "through my fund" with no insurer or billing alias identified above -> ask INSURER_QUESTION. HALT. On response -> map to insurer and confirm_service.
+Caller says "insurance" / "through insurance" / "through a provider" / "EPC" / "Medicare" / "care plan" / "GP referral" / "enhanced primary care" / "chronic disease" / or any equivalent -> go to EPC confirm_service directly. This is the only insurance path — no further insurer question is asked.
 
 Insurance confirm_service calls (run LOCATION GATE first — if confirmed_location not set, ask before calling):
-- COGENT:    Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Cogent: Physiotherapy Appointment", "appointment_type_id": "1735237528916600827", "variant_type": "cogent", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
-- DVA:       Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "DVA", "appointment_type_id": "1909345581965255898", "variant_type": "dva", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
-- EPC:       Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "EPC/MEDICARE", "appointment_type_id": "1429516430138680458", "variant_type": "epc", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
-- NDIS:      Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "NDIS", "appointment_type_id": "1817163404608022368", "variant_type": "ndis", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
-- TAC:       Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "TAC", "appointment_type_id": "1876639551758280128", "variant_type": "tac", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
-- WORKCOVER: Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Work Cover", "appointment_type_id": "1704881108627236078", "variant_type": "workcover", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
+- EPC: Call universal_router: intent="confirm_service", called_number, caller_id, payload={"appointment_type": "EPC/MEDICARE", "appointment_type_id": "1429516430138680458", "variant_type": "epc", "business_name": confirmed_location, "business_id": confirmed_business_id}. HALT.
 
 ### STEP 4 — PRIVATE SERVICE QUESTION
 Caller said "private" but hasn't named which service.
@@ -507,8 +491,6 @@ B2. If caller explicitly states no practitioner preference ("Anyone is fine", "W
 
 C. If agent's last turn was BILLING_QUESTION -> evaluate caller's answer using STEP 3 logic.
 
-C2. If agent's last turn was INSURER_QUESTION -> map caller's answer to INSURANCE PATH confirm_service. HALT.
-
 C3. If agent's last turn was PRIVATE_SERVICE_QUESTION -> run SERVICE DETECTION and go to named branch.
 
 C4. If agent's last turn was PELVIC_QUALIFIER:
@@ -533,13 +515,8 @@ C5. If agent's last turn was LOCATION_QUESTION (or the Epping disambiguation que
   If NO MISMATCH: use working_pending_service and call the matching confirm_service from the table below with business_name=confirmed_location. HALT.
 
   PENDING SERVICE -> CONFIRM_SERVICE MAPPING (all fields inside payload):
-  "physio_private"     -> payload={"appointment_type": "Physiotherapy Standard Appointment", "appointment_type_id": "1429516429945742473", "variant_type": "private",    "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "physio_cogent"      -> payload={"appointment_type": "Cogent: Physiotherapy Appointment",  "appointment_type_id": "1735237528916600827", "variant_type": "cogent",     "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "physio_dva"         -> payload={"appointment_type": "DVA",                                "appointment_type_id": "1909345581965255898", "variant_type": "dva",        "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "physio_epc"         -> payload={"appointment_type": "EPC/MEDICARE",                       "appointment_type_id": "1429516430138680458", "variant_type": "epc",        "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "physio_ndis"        -> payload={"appointment_type": "NDIS",                               "appointment_type_id": "1817163404608022368", "variant_type": "ndis",       "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "physio_tac"         -> payload={"appointment_type": "TAC",                                "appointment_type_id": "1876639551758280128", "variant_type": "tac",        "business_name": confirmed_location, "business_id": confirmed_business_id}
-  "physio_workcover"   -> payload={"appointment_type": "Work Cover",                         "appointment_type_id": "1704881108627236078", "variant_type": "workcover",  "business_name": confirmed_location, "business_id": confirmed_business_id}
+  "physio_private"     -> payload={"appointment_type": "Physiotherapy Standard Appointment", "appointment_type_id": "1429516429945742473", "variant_type": "private", "business_name": confirmed_location, "business_id": confirmed_business_id}
+  "physio_epc"         -> payload={"appointment_type": "EPC/MEDICARE",                       "appointment_type_id": "1429516430138680458", "variant_type": "epc",     "business_name": confirmed_location, "business_id": confirmed_business_id}
   "exercise_physiology"-> payload={"appointment_type": "Exercise Phy Appointment",           "appointment_type_id": "1704881836682913007",                               "business_name": confirmed_location, "business_id": confirmed_business_id}
   "health_assessment"  -> payload={"appointment_type": "Health Assessment",                  "appointment_type_id": "1704884483246793968",                               "business_name": confirmed_location, "business_id": confirmed_business_id}
   "pelvic_initial"     -> payload={"appointment_type": "Pelvic Floor Initial",               "appointment_type_id": "1705465109867930992", "patient_status": "new",      "variant_type": "initial",   "business_name": confirmed_location, "business_id": confirmed_business_id}
