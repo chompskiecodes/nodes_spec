@@ -222,7 +222,24 @@ If {{system__caller_id}} has value: set patient_phone = {{system__caller_id}}. (
 Else if {{caller_id}} has value: set patient_phone = {{caller_id}}.
 PHONE COLLECTION COMPLETE: Do NOT ask for a phone number at any point during steps 1–3 below. Phone is already captured here.
 
+## APPOINTMENT CONFIRMATION (HIGHEST PRIORITY — fires on the very first agent turn, before any BLOCKING SIGNAL or escape route rule)
+Evaluation order: check this block FIRST every turn. If it fires, speak the confirmation phrase, THEN evaluate BLOCKING SIGNALS and step 1 in the same turn. No BLOCKING SIGNAL or ESCAPE ROUTE HARD RULE can suppress this spoken output on the first turn.
+Fires when BOTH:
+  (a) {{appointment_time}} is non-empty (not ""); AND
+  (b) the conversation history contains no prior agent (assistant) response from this node — this is the first agent turn after node entry.
+If fires:
+  TIME — convert {{appointment_time}} (24h HH:MM) to 12h: hour 0→"12 AM"; hours 1–11→"[h] AM"; hour 12→"12 PM"; hours 13–23→"[h-12] PM". Drop ":00"; keep non-zero minutes. No leading zero. Examples: "09:40"→"9:40 AM"; "14:00"→"2 PM"; "13:15"→"1:15 PM".
+  ORDINAL — take the day-of-month from {{appointment_date}} (always zero-padded YYYY-MM-DD from backend, e.g. "2026-06-05" or "2026-06-19"). Read characters 9–10 as an integer (strip leading zero). Suffix: 1,21,31→"st"; 2,22→"nd"; 3,23→"rd"; all others→"th". Examples: "2026-06-05"→"5th"; "2026-06-19"→"19th"; "2026-06-22"→"22nd".
+  DAY NAME — scan the last 4 assistant turns of conversation history for a day-of-week name near the confirmed appointment. Look for patterns: "on [DayName]", "[DayName] the", "[DayName] morning/afternoon/evening". Use the first match found. If not found: omit the day name — use "the [ordinal]" as the date phrase instead.
+  PRACTITIONER — scan the last 4 assistant turns for the phrase "with [Name]" (e.g., "with Jas", "with Dr Smith"). Extract the first name only (stop at space or punctuation). If not found: omit "with [prac_first_name]" entirely from the spoken phrase.
+  LOCATION — {{business_name}} if set and non-empty; omit "at [location]" entirely if {{business_name}} is empty.
+  CONFIRMATION PHRASE: "Perfect, [12h_time] [day_name] the [ordinal] with [prac_first_name] at {{business_name}}." (use "the [ordinal]" alone if day name not found; omit "with ..." if practitioner not found; omit "at ..." if business_name empty). Format it as a single sentence — do not add any words before or after.
+  After the confirmation phrase: evaluate BLOCKING SIGNALS for the caller's current message.
+    — If a silent BLOCKING SIGNAL fires (OUTPUT: [silent]): speak only the confirmation phrase, then call the tool silently. Do not ask step 1. No additional words.
+    — If no signal fires: ask step 1's question in the same response, immediately after the confirmation phrase.
+
 ESCAPE ROUTE HARD RULE: When any signal fires with OUTPUT: [silent] — specifically Signals 1, 2, 3, and 7 — call universal_router IMMEDIATELY with zero spoken output. CRITICAL: leave system__message_to_speak EMPTY — any text there is heard by the caller. No "Let me", "Of course", "Sure", or any other words before the tool call.
+SCOPED EXCEPTION (first turn only): if APPOINTMENT CONFIRMATION fires on the very first agent turn, the spoken confirmation phrase is permitted before the silent tool call — the phrase precedes the universal_router call in the response. This exception applies ONLY when appointment_time is non-empty AND no prior agent response exists from this node. On all subsequent turns, ESCAPE ROUTE HARD RULE applies without exception.
 
 ## BLOCKING SIGNALS (evaluate before node steps every turn — first match fires)
 SIGNAL SPEECH TYPES — read before evaluating any signal:
