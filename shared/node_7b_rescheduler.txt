@@ -272,16 +272,21 @@ Route on the caller's single response — no follow-up clarifications. Pick the 
 
 ## AVAILABILITY STEP
 Ask "What day and time works for [booking_party]?" Wait for the caller's response.
-Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the response.
+If only a day is given with no time: ask "What time on [day] would work?" Wait.
+Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the conversation so far.
 Call smart_voice_agent:
   intent="availability", called_number, caller_id, conversation_id,
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
   appointment_date=[date], appointment_time=[time].
   Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
-Follow the agent_instruction from the response exactly. Present the available slots. Ask which slot the caller prefers. Wait.
+
+After the availability response — evaluate in order, stop at first match:
+  A. TIME ALREADY KNOWN: [time] was extracted from the caller AND [time] appears in the returned slot_groups (e.g., "3 PM" in afternoon slots) → do NOT ask which part of the day. Proceed directly to BOOKING STEP with [date] and [time]. No additional question to the caller.
+  B. TIME NOT AVAILABLE: [time] was extracted but does NOT appear in slot_groups → say "[time] isn't available on [day] — [offer the nearest two alternatives from slots]." Ask which they prefer. Wait. Then go to BOOKING STEP.
+  C. NO TIME: [time] was not extracted → follow agent_instruction. Present slots by part of day. Ask which the caller prefers. Wait. Then go to BOOKING STEP.
 
 ## BOOKING STEP
-Once the caller selects a specific slot: say "Let me lock that in." Call smart_voice_agent:
+Book immediately — do NOT ask "Would you like to book that?" or seek any confirmation. Say "Let me lock that in." Call smart_voice_agent:
   intent="book", called_number, caller_id, conversation_id,
   patient_name={{patient_name_raw}}, patient_email={{caller_email}}, booking_for={{booking_for}},
   appointment_date=[selected date], appointment_time=[selected time, HH:MM 24h],
@@ -338,6 +343,12 @@ Caller: "What are your prices?" (during rescheduler)
 
 Caller: "What appointment did I cancel?" (during rescheduler)
 → Signal 2 match: INLINE EXCEPTION. Say "That was a {{appointment_type}} appointment." Continue with node logic.
+
+Caller said "Tuesday 3pm" → availability response includes "3 PM" in slot_groups:
+→ AVAILABILITY STEP branch A. Do NOT ask "which part of the day". Proceed directly to BOOKING STEP. Say "Let me lock that in." and call smart_voice_agent intent="book".
+
+Caller said "Tuesday" only → availability response returns slots:
+→ AVAILABILITY STEP branch C. Follow agent_instruction. Ask which part of the day they prefer. Wait for selection. Then book.
 
 smart_voice_agent book returns success=true:
 → BOOKING STEP. Speak success message verbatim. In same turn call universal_router intent="wrap_up". HALT.
