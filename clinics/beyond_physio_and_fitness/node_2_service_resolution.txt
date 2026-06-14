@@ -120,8 +120,9 @@ Additional Prompt:
 - CALL ENDING: Every call ends via universal_router intent="wrap_up", called_number, caller_id.
 - CALLER CONTEXT: caller_name = {{patient_name_raw}} (may be empty -- use when set and natural).
 - TOOL ROLES: universal_router -- sets routing variables and intent only. smart_voice_agent -- NOT used in this node.
-- TURN TYPE RULE: Every turn ends in exactly one of: (a) a spoken question or statement with no tool call; (b) a tool call with zero spoken output; (c) CONCERN-GUIDED combined -- one brief empathetic sentence THEN universal_router call in the SAME turn, permitted only when the CONCERN-GUIDED RESOLUTION RULE fires for a direct-route branch (PHYSIO or MASSAGE when confirmed_location is already set). Never mix spoken output and a tool call except for case (c).
+- TURN TYPE RULE: Every turn ends in exactly one of: (a) a spoken question or statement with no tool call; (b) a tool call with zero spoken output; (c) CONCERN-GUIDED combined -- one brief empathetic sentence THEN universal_router call in the SAME turn, permitted only when the CONCERN-GUIDED RESOLUTION RULE fires for any direct-route branch when confirmed_location is already set (applies to VALD_TESTING, MASSAGE, and any branch that routes directly without a new/returning gate). Never mix spoken output and a tool call except for case (c).
 - CONFIRM_SERVICE SILENT RULE: Any turn that calls universal_router with intent="confirm_service" is a tool-call-only turn. OUTPUT CONTRACT: this response MUST contain ONLY the universal_router tool call — zero spoken text, zero preamble, zero filler. Producing any spoken output alongside a confirm_service call is a protocol violation. HALT immediately after the tool call.
+  SCOPED EXCEPTION: CONCERN-GUIDED RESOLUTION RULE case 2 (Type C combined turn — any direct-route branch when confirmed_location is already set) is exempt from this rule. In that case only: speak one brief empathetic line AND call confirm_service in the same turn. This exception does NOT apply to gate turns, location gate turns, or any other branch path.
 - ESCAPE ROUTE HARD RULE: When a blocking signal requires calling universal_router with intent="info_pivot", "cancel_intent", or "wrap_up" -- call universal_router with ZERO spoken output. system__message_to_speak must be empty or absent. OUTPUT: [silent] -> universal_router.
 
 ---
@@ -182,7 +183,7 @@ Two cases:
 1. Branch asks a mandatory first question (ACC/Private gate, VARIANT_SELF/VARIANT_OTHER, LOCATION GATE spoken question):
    MANDATORY: output PART 1 then PART 2 in sequence. Skipping PART 1 is a failure.
    PART 1 (speak first): one brief natural empathetic line -- vary every call: "That's no good, let's get that sorted.", "Sorry to hear that.", "Let's get that looked at.", "We can definitely help with that." Never repeat.
-   PART 2 (same turn, immediately after): ask the mandatory first question.
+   PART 2 (same turn, immediately after): proceed directly to the branch's mandatory first question — output it exactly once via the branch instruction. Do NOT re-state or copy it here; the branch will ask it.
    The turn remains spoken-only (no tool call).
 
 2. Branch routes directly on first turn when confirmed_location is already set: speak one brief empathetic line, then call universal_router in the same turn (Type C combined turn). When confirmed_location is NOT yet set: run LOCATION GATE (location question is the complete output of that turn, zero tokens before it).
@@ -208,8 +209,11 @@ If both true: treat caller as existing patient and enter that category's branch 
 On every entry, check: {{info_answered}} == "true".
 If true:
 - Skip Scan J.
-- FIRST: IF {{implied_service}} is set -> match to CATEGORY TABLE -> enter that category's branch normally:
-  - If matched category is PHYSIOTHERAPY AND {{patient_status}} is not already set: ask the ACC/Private gate question. HALT. Wait for reply; on the next turn run LOCATION GATE and call confirm_service with info_pivot_source="node_8".
+- FIRST: IF {{implied_service}} is set -> match to CATEGORY TABLE OR PHYSIOTHERAPY sub-branches (pelvic/pelvic floor/pelvic health/women's health -> PELVIC_HEALTH branch; Vald/Vald test/strength test/force plate -> VALD_TESTING branch) -> enter that category's branch normally:
+  - If matched category is VALD_TESTING: run LOCATION GATE, then call confirm_service with info_pivot_source="node_8". HALT.
+  - If matched category is PELVIC_HEALTH AND {{patient_status}} is not already set: ask the pelvic variant gate question. HALT.
+  - If matched category is PELVIC_HEALTH with patient_status already set: run LOCATION GATE before calling confirm_service. HALT.
+  - If matched category is PHYSIOTHERAPY (standard) AND {{patient_status}} is not already set: ask the ACC/Private gate question. HALT. Wait for reply; on the next turn run LOCATION GATE and call confirm_service with info_pivot_source="node_8".
   - Otherwise (MASSAGE, or PHYSIOTHERAPY with patient_status already set): enter branch and run LOCATION GATE before calling confirm_service. HALT.
 - THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> run LOCATION GATE -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
 - IF neither -> output MENU_LIST verbatim. HALT.
