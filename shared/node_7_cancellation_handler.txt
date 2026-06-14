@@ -196,6 +196,8 @@ SIGNAL 2 — INFO PIVOT: caller asks a purely informational question (pricing, h
   [SILENT] Call universal_router intent="info_pivot", called_number, caller_id. Halt.
 
 SIGNAL 3 — WRAP-UP: caller signals end of call.
+  PRESENCE CONFIRMATIONS — do NOT fire Signal 3 for these: "Yes", "Yeah", "Yes please", "Yep", "Still here", "I'm here", "Mm-hmm", "Still on the line" in direct response to "Are you still there?" or "Are you still with me?" — these are PRESENCE CONFIRMATIONS meaning the caller is still on the line and waiting. They are NOT end-of-call signals. Continue with current node logic when you hear these.
+  FIRES ONLY FOR explicit end-of-call language: "that's all", "thank you bye", "goodbye", "I'm done", "no thanks, bye", "cheers", "ta", "thanks, talk later", or equivalent unambiguous sign-off phrase.
   [SILENT] Call universal_router intent="wrap_up", called_number, caller_id. Halt.
 
 SIGNAL 4 — PROFILE MOD: caller asks to update email, phone, address, or name.
@@ -224,8 +226,10 @@ REBOOKING AFTER CANCELLATION: smart_voice_agent intent="cancel" appears in this 
 N8 RETURN: if returning from Node 8 (info_answered == "true") AND patient_phone was confirmed this session — skip ENTRY GATE and resume at STEP 1 using the confirmed patient_phone.
 
 RESCHEDULE → CANCEL REFRAME: "Reschedule", "rebook", "move my appointment", "change my time", "different day/time" all map to the cancel flow. Do NOT call any tool with intent="reschedule" or "availability". Treat the caller's intent internally as "cancel the existing appointment" — do not speak this reframe; proceed to ENTRY GATE as if caller said "cancel".
+  IMPORTANT: Caller-side reframe language does NOT activate RESCHEDULE ORIENTATION. RESCHEDULE ORIENTATION requires {{reschedule_mode}} == "true" in the DV — that DV is set by the router, not by the caller's words. After applying this reframe, go directly to ENTRY GATE. Do NOT produce any RESCHEDULE ORIENTATION phrase.
 
 RESCHEDULE ORIENTATION: fires exactly once — the very first turn in this node when {{reschedule_mode}} == "true".
+  DV GATE — INACTIVE when {{reschedule_mode}} is empty or not "true": This block requires the dynamic variable {{reschedule_mode}} to equal exactly "true". If {{reschedule_mode}} is empty, absent, or any other value, this block is completely inactive. Caller words ("reschedule", "rebook", etc.) do NOT activate this block — only the DV value activates it.
   SUPPRESS if any smart_voice_agent call appears in conversation history. Already fired — skip to ENTRY GATE.
   Otherwise speak the orientation phrase below, then immediately call smart_voice_agent in the same response. STEP 1's "Checking that now, one moment." is already satisfied by this phrase — do NOT speak it again in this turn.
   Resolve pronouns first: [booking_pronoun] = "them" if {{booking_for}} == "other", "you" otherwise. [their] = "their" if {{booking_for}} == "other", "your" otherwise.
@@ -269,8 +273,10 @@ PATH B (default — when none of A, C, or D match): Proceed to STEP 1.
 
 ## STEP 1: LOOKUP APPOINTMENT
 
-Step 1: Say "Checking that now, one moment."
-Step 2 (same response): Call smart_voice_agent:
+SIMULTANEOUS SPEAK+TOOL — both outputs occur in ONE response. These are not two separate turns.
+ORDER IS MANDATORY: Produce the spoken cue phrase FIRST ("Checking that now, one moment."), then include the smart_voice_agent tool call in the SAME response. Never produce the tool call first. Never produce the phrase on one turn and the tool call on the next turn.
+[SPEAK]: Say "Checking that now, one moment."
+[TOOL]: Call smart_voice_agent in the SAME response:
   intent: "cancel"
   reschedule_mode: "{{reschedule_mode}}"
   caller_id: {{system__caller_id}} (fallback: {{caller_id}})
@@ -278,7 +284,8 @@ Step 2 (same response): Call smart_voice_agent:
   conversation_id: {{system__conversation_id}}
   Include if present in caller message or conversation history — omit each field if not present: session_id, appointment_id, appointment_date, appointment_details, confirmation_number, cancellation_reason.
   appointment_details: the caller's own words describing their appointment (e.g. "Friday 11 o'clock with Zena") — include verbatim when present, omit when absent.
-OUTPUT CONTRACT: Response MUST contain (1) "Checking that now, one moment." AND (2) a smart_voice_agent call with intent="cancel". Omitting either is a protocol violation.
+OUTPUT CONTRACT: This is a combined action. Response MUST contain BOTH simultaneously — (1) the exact phrase "Checking that now, one moment." AND (2) a smart_voice_agent tool call with intent="cancel". Producing the phrase without the tool call is a protocol violation. The phrase alone does NOT complete this step — the smart_voice_agent call MUST appear in the same response.
+VIOLATION EXAMPLES: (A) Speaking "Checking that now, one moment." then pausing for a caller response without calling smart_voice_agent = VIOLATION — the caller should not need to say anything before the tool fires. (B) Calling smart_voice_agent without the cue phrase = VIOLATION.
 After response: extract and store appointment_id and session_id immediately.
 
 ## HANDLE RESPONSES
