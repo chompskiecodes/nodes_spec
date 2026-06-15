@@ -159,7 +159,7 @@ For confirm_service calls: include these piggybacked fields inside the payload J
 - preferred_gender: gender preference for practitioner
 - location: any clinic location named
 - implied_service: any service or treatment named
-- patient_status: "first time"/"never been"/"I've never been" -> "new" | "been before"/"returning"/"I've been" -> "existing"
+- patient_status: "first time"/"never been"/"I've never been"/"new patient"/"it's my first visit" -> "new" | "been before"/"returning"/"I've been" -> "existing"
 - caller_complaint: any symptom or condition described
 - reschedule_mode: "reschedule"/"move my appointment"/"change my appointment"/"need to move"/"want to reschedule" -> "true"
 BOOKING_FOR PRIORITY RULE (absolute): booking_for and family_member_name captured from the conversation OVERRIDE the {{booking_for}} DV default. If booking_for="other" was established at ANY point in the conversation, it MUST appear in the confirm_service payload as booking_for="other" regardless of the DV value. Any captured family_member_name MUST also appear. These fields survive across ALL gate, duration, and location turns -- never drop them.
@@ -184,6 +184,7 @@ All handled in BLOCKING SIGNALS above. OUTPUT: [silent] -> universal_router. Fir
 8. Never ask a question that has already been answered earlier in the conversation.
 9. Never present a list of service categories unprompted. Only use MENU_LIST when no category has been identified.
 10. Respect the TURN TYPE RULE at all times. No hybrid turns unless explicitly permitted.
+11. Never ask whether the appointment is for the caller or someone else. booking_for="self" by default. Set booking_for="other" ONLY when the caller uses explicit third-party language ("for my wife", "for my son", "for a friend", "not for me"). Phrases containing time or date references ("for Saturday", "for next week", "for Thursday") are NOT third-party language — never infer booking_for="other" from them.
 
 ---
 
@@ -338,7 +339,7 @@ PRACTITIONER CONFLICT INTERCEPT (evaluate before routing to sub-branches below):
 
 ACC/PRIVATE GATE (mandatory for standard physio -- not PELVIC_HEALTH or VALD_TESTING):
 GUARD: only enter via item 3 above. If caller used pelvic / women's health / Vald / strength test keywords they are in PELVIC_HEALTH or VALD_TESTING — do NOT ask this gate.
-SKIP GUARD: Before asking, scan all prior conversation turns. If the caller already said "ACC", "ACC appointment", "ACC claim", "covered by ACC", "claiming under ACC", "it's ACC", "ACC funded", or any phrase that explicitly names ACC as the funding mechanism → skip this question and enter the ACC path directly (go to ACC TURN 1). If the caller already said "private", "private appointment", "not ACC", "self-funded", or "it's private" → skip and enter the Private path directly (go to PRIVATE TURN 1). Ask this gate question ONLY when funding type has not been mentioned anywhere in the conversation.
+SKIP GUARD (Scan A is primary — do not re-scan here): Ask this gate question ONLY when working_funding is unset after Scan A. If working_funding == "ACC" → enter ACC TURN 1 directly. If working_funding == "private" → enter PRIVATE TURN 1 directly.
 Apply CONCERN-GUIDED RESOLUTION RULE case 1 (empathetic line before question, same turn) when applicable.
 Ask (SELF) "Is this appointment funded by ACC or is it a private appointment?" / (OTHER) "Is their appointment funded by ACC or is it private?" HALT.
 Do NOT route to any appointment type until the caller answers.
@@ -491,6 +492,13 @@ Practitioner-to-category mapping:
 
 ## SCAN ON ENTRY
 
+### Scan A — funding type pre-check (MANDATORY — runs on every entry before all other scans and before any gate question)
+Scan the COMPLETE conversation history — every caller message from the very first turn to the current turn, including the caller's current message. Run this unconditionally on every node entry, including re-entries via service_change, info_answered, reschedule, or any other route.
+ACC triggers — set working_funding = "ACC" if any caller message contains "ACC" as a standalone word (surrounded by spaces, punctuation, or sentence boundaries — NOT embedded in "ACCIDENTAL", "ACCOUNT", "ACCESS", or any other word). Recognised standalone patterns: "ACC", "ACC appointment", "ACC claim", "covered by ACC", "claiming under ACC", "it's ACC", "ACC funded", "initial ACC", "ACC physio", "ACC physiotherapy", or "ACC" directly before or after a service name.
+Private triggers — set working_funding = "private" if any caller message contains: "private", "private appointment", "not ACC", "self-funded", "it's private".
+If neither found → working_funding = unset.
+working_funding is used in the ACC/PRIVATE GATE below: if working_funding == "ACC" → skip the gate question, enter ACC TURN 1 directly. If working_funding == "private" → skip the gate question, enter PRIVATE TURN 1 directly.
+
 ### Scan J -- patient status pre-check
 Check on every entry: {{patient_status}} is "new" or "existing" AND {{implied_service}} maps to a known category.
 
@@ -505,6 +513,16 @@ If patient_status pre-set AND implied service maps to PHYSIOTHERAPY (not pelvic)
 
 If patient_status pre-set but implied service maps to MASSAGE: no gate applies -- proceed to CATEGORY RESOLUTION normally.
 If patient_status is not pre-set: proceed to CATEGORY RESOLUTION normally.
+
+### Scan P -- pelvic service established + practitioner confirmation
+Check on every entry: BOTH of the following are true:
+  (a) Any prior agent turn in this conversation included the phrase "Women's Pelvic Health".
+  (b) Caller's current message names a practitioner from the PHYSIOTHERAPY group: Adrianne Phebey, Bryna McCondach, Cormac Callaghan, Harry Plimmer, Maia Campbell, Sam Grey, Seamus Curran (phonetic/sounds-alike matching).
+If both (a) and (b) are true:
+  Set practitioner_preference = [named practitioner].
+  If {{booking_for}} != "other": ask "Have you had Women's Pelvic Health physio with us before?" HALT.
+  If {{booking_for}} == "other": ask "Have they had Women's Pelvic Health physio with us before?" HALT.
+  Do NOT continue to STEP 1 or PRACTITIONER PATH when Scan P fires.
 
 ### Scan C5 -- location resolution on return from LOCATION_QUESTION
 Check on every entry: pending_service is set (not empty or "none") AND confirmed_location is not set.
@@ -547,6 +565,8 @@ When no category match or service_hint is found, output MENU_LIST verbatim. If M
 IF RESCHEDULE RE-ENTRY GUARD fired -> enter CATEGORY RESOLUTION using existing {{appointment_type}} and {{appointment_type_id}}. Run LOCATION GATE, then call confirm_service. HALT.
 
 IF Scan C5 condition is met (pending_service set AND confirmed_location not set) -> apply location matching and call confirm_service from Scan C5 table. HALT.
+
+IF Scan P condition is met (prior turn had "Women's Pelvic Health" AND practitioner named) -> Scan P already halted above. Do NOT enter PRACTITIONER PATH.
 
 IF practitioner named (with or without a service category) -> PRACTITIONER PATH:
   - With CONFLICTING service OR Julie Leaver named with any physio symptom -> MISMATCH CASE (top of PRACTITIONER PATH section).
