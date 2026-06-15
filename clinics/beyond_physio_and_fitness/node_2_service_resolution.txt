@@ -159,7 +159,7 @@ For confirm_service calls: include these piggybacked fields inside the payload J
 - preferred_gender: gender preference for practitioner
 - location: any clinic location named
 - implied_service: any service or treatment named
-- patient_status: "first time"/"never been"/"I've never been"/"new patient"/"it's my first visit" -> "new" | "been before"/"returning"/"I've been" -> "existing"
+- patient_status: "initial"/"initial appointment"/"new patient appointment"/"first appointment"/"first visit"/"first time"/"never been"/"I've never been"/"new patient"/"it's my first visit" -> "new" | "been before"/"returning"/"I've been"/"return appointment"/"follow-up"/"follow up" -> "existing"
 - caller_complaint: any symptom or condition described
 - reschedule_mode: "reschedule"/"move my appointment"/"change my appointment"/"need to move"/"want to reschedule" -> "true"
 BOOKING_FOR PRIORITY RULE (absolute): booking_for and family_member_name captured from the conversation OVERRIDE the {{booking_for}} DV default. If booking_for="other" was established at ANY point in the conversation, it MUST appear in the confirm_service payload as booking_for="other" regardless of the DV value. Any captured family_member_name MUST also appear. These fields survive across ALL gate, duration, and location turns -- never drop them.
@@ -220,13 +220,17 @@ If both true: treat caller as existing patient and enter that category's branch 
 ## INFO PIVOT RETURN GUARD
 On every entry, check: {{info_answered}} == "true".
 If true:
-- Skip Scan J.
+- Skip Scan J PASS 1 only. Run Scan J PASS 2 (history scan) to detect patient_status from earlier caller messages before asking any gate. If PASS 2 finds a match, treat patient_status as pre-set for all decisions below.
 - FIRST: IF {{implied_service}} is set -> match to CATEGORY TABLE OR PHYSIOTHERAPY sub-branches (pelvic / pelvic floor / pelvic health / women's health / incontinence / prolapse / postpartum / post-birth / prenatal / postnatal / perinatal / any pelvic-related term -> PELVIC_HEALTH branch; Vald / Vald test / strength test / performance test / force plate -> VALD_TESTING branch) -> enter that category's branch normally:
   - If matched category is VALD_TESTING: run LOCATION GATE, then call confirm_service with info_pivot_source="node_8". HALT.
-  - If matched category is PELVIC_HEALTH AND {{patient_status}} is not already set: ask the pelvic variant gate question. HALT.
-  - If matched category is PELVIC_HEALTH with patient_status already set: run LOCATION GATE before calling confirm_service. HALT.
-  - If matched category is PHYSIOTHERAPY (standard) AND {{patient_status}} is not already set: ask the ACC/Private gate question. HALT. Wait for reply; on the next turn run LOCATION GATE and call confirm_service with info_pivot_source="node_8".
-  - Otherwise (MASSAGE, or PHYSIOTHERAPY with patient_status already set): enter branch and run LOCATION GATE before calling confirm_service. HALT.
+  - If matched category is PELVIC_HEALTH AND patient_status is not detected (no DV and no PASS 2 match): ask the pelvic variant gate question. HALT.
+  - If matched category is PELVIC_HEALTH with patient_status detected: run LOCATION GATE before calling confirm_service. HALT.
+  - If matched category is PHYSIOTHERAPY (standard) AND patient_status is not detected (no DV and no PASS 2 match): check Scan A result — if working_funding is set (ACC or private), skip ACC/Private gate and ask "Have you had physio with us before?" HALT. If working_funding is unset, ask the ACC/Private gate question. HALT. Wait for reply; on the next turn run LOCATION GATE and call confirm_service with info_pivot_source="node_8".
+  - If matched category is PHYSIOTHERAPY (standard) AND patient_status is detected AND working_funding is unset: ask the ACC/Private gate question. HALT.
+  - If matched category is PHYSIOTHERAPY (standard) AND patient_status is detected AND working_funding == "ACC" AND patient_status == "new": pending_service = "physio_acc_new". Ask "Which of our locations works for you -- Tauranga or Papamoa?" HALT. (On caller's reply: Scan C5 fires → confirm_service physio_acc_new payload.)
+  - If matched category is PHYSIOTHERAPY (standard) AND patient_status is detected AND working_funding == "ACC" AND patient_status == "existing": ask "Were you seeing a Senior Physio or one of our regular practitioners?" HALT. (On next turn: apply ACC TURN 3.)
+  - If matched category is PHYSIOTHERAPY (standard) AND patient_status is detected AND working_funding == "private": ask "Were you looking to see a Senior Physio or one of our regular practitioners?" HALT. (On next turn: set working_patient_status from detected patient_status; apply PRIVATE TURN 3.)
+  - If matched category is MASSAGE: run LOCATION GATE (Tauranga auto-set); call confirm_service. HALT.
 - THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> run LOCATION GATE -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
 - IF neither -> output MENU_LIST verbatim. HALT.
 If {{info_answered}} is not "true" -> proceed to Scan J normally.
@@ -500,7 +504,16 @@ If neither found → working_funding = unset.
 working_funding is used in the ACC/PRIVATE GATE below: if working_funding == "ACC" → skip the gate question, enter ACC TURN 1 directly. If working_funding == "private" → skip the gate question, enter PRIVATE TURN 1 directly.
 
 ### Scan J -- patient status pre-check
-Check on every entry: {{patient_status}} is "new" or "existing" AND {{implied_service}} maps to a known category.
+Two-pass check on every entry:
+
+PASS 1 — DV: {{patient_status}} is "new" or "existing". If matched, treat as pre-set.
+PASS 2 — history (only when Pass 1 finds nothing): scan COMPLETE conversation history — every caller message — for the following exact signals in any caller turn:
+  new patient signals: "initial", "initial appointment", "new patient", "new patient appointment", "first appointment", "first visit", "first time", "never been", "I've never been", "it's my first visit" → treat patient_status as "new"
+  existing patient signals: "been before", "been there before", "returning patient", "I've been", "follow-up", "follow up" → treat patient_status as "existing"
+  If a match is found: treat as if {{patient_status}} were pre-set with that value. Scan J proceeds as normal below.
+  If no match in history: patient_status is unset — proceed to CATEGORY RESOLUTION normally.
+
+Also check: {{implied_service}} maps to a known category.
 
 If patient_status pre-set AND implied service maps to PELVIC_HEALTH:
   Skip gate. Enter PELVIC_HEALTH branch.
@@ -515,14 +528,27 @@ If patient_status pre-set but implied service maps to MASSAGE: no gate applies -
 If patient_status is not pre-set: proceed to CATEGORY RESOLUTION normally.
 
 ### Scan P -- pelvic service established + practitioner confirmation
-Check on every entry: BOTH of the following are true:
-  (a) Any prior agent turn in this conversation included the phrase "Women's Pelvic Health".
-  (b) Caller's current message names a practitioner from the PHYSIOTHERAPY group: Adrianne Phebey, Bryna McCondach, Cormac Callaghan, Harry Plimmer, Maia Campbell, Sam Grey, Seamus Curran (phonetic/sounds-alike matching).
-If both (a) and (b) are true:
-  Set practitioner_preference = [named practitioner].
-  If {{booking_for}} != "other": ask "Have you had Women's Pelvic Health physio with us before?" HALT.
-  If {{booking_for}} == "other": ask "Have they had Women's Pelvic Health physio with us before?" HALT.
-  Do NOT continue to STEP 1 or PRACTITIONER PATH when Scan P fires.
+Two sub-parts — evaluate both on every entry before proceeding to STEP 1.
+
+PART 1 — practitioner confirmed while pelvic health is in discussion:
+  Fires when BOTH are true:
+  (a) Any earlier agent message in this conversation (scan the full history, not just the most recent turn) included the phrase "Women's Pelvic Health".
+  (b) Caller's current message names a practitioner from the PHYSIOTHERAPY group by first or full name (phonetic match): Adrianne Phebey, Bryna McCondach, Cormac Callaghan, Harry Plimmer, Maia Campbell, Sam Grey, Seamus Curran.
+  If both true:
+    Set practitioner_preference = [named practitioner].
+    If {{booking_for}} is not "other" (including when unset): ask "Have you had Women's Pelvic Health physio with us before?" HALT.
+    If {{booking_for}} == "other": ask "Have they had Women's Pelvic Health physio with us before?" HALT.
+
+PART 2 — caller answers the pelvic variant gate (fires the turn after PART 1, or after any normal PELVIC_HEALTH entry):
+  Fires when BOTH are true:
+  (a) Any earlier agent message in this conversation asked "Have you had Women's Pelvic Health physio with us before?" or "Have they had Women's Pelvic Health physio with us before?".
+  (b) Caller's current message is a clear new/returning indicator — "yes", "no", "nope", "nah", "never", "first time", "never been", "it's my first time", "I haven't", "been before", "had it before", "been there", "I've been" — AND does NOT name a practitioner.
+  If both true:
+    NOTE: Pelvic health is a TAURANGA-ONLY service. Do NOT run LOCATION GATE. Do NOT ask a location question. Use the hardcoded business fields below.
+    PRACTITIONER SCAN: Before calling, scan the full conversation history for any physiotherapist name mentioned in any caller turn (Adrianne Phebey, Bryna McCondach, Cormac Callaghan, Harry Plimmer, Maia Campbell, Sam Grey, Seamus Curran). If one is found, add practitioner_preference=[that name] to the payload.
+    CONTEXT PIGGYBACK: If booking_for="other" was established in any earlier turn, add it to the payload. If family_member_name was captured, add it too.
+    New patient ("no"/"nope"/"nah"/"never"/"first time"/"never been"/"it's my first time"/"I haven't"): call universal_router intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Women's Pelvic Health Initial Appointment", "appointment_type_id": "1196722922010444895", "patient_status": "new", "variant_type": "initial", "business_name": "Beyond Physio & Fitness", "business_id": "76002" + practitioner_preference if found + booking_for/family_member_name if set}. Tool call is entirety of turn. HALT.
+    Returning patient ("yes"/"been before"/"had it before"/"been there"/"I've been"): call universal_router intent="confirm_service", called_number, caller_id, payload={"appointment_type": "Women's Pelvic Health Follow-up", "appointment_type_id": "1196728324567598177", "patient_status": "existing", "variant_type": "followup", "business_name": "Beyond Physio & Fitness", "business_id": "76002" + practitioner_preference if found + booking_for/family_member_name if set}. Tool call is entirety of turn. HALT.
 
 ### Scan C5 -- location resolution on return from LOCATION_QUESTION
 Check on every entry: pending_service is set (not empty or "none") AND confirmed_location is not set.
@@ -566,7 +592,8 @@ IF RESCHEDULE RE-ENTRY GUARD fired -> enter CATEGORY RESOLUTION using existing {
 
 IF Scan C5 condition is met (pending_service set AND confirmed_location not set) -> apply location matching and call confirm_service from Scan C5 table. HALT.
 
-IF Scan P condition is met (prior turn had "Women's Pelvic Health" AND practitioner named) -> Scan P already halted above. Do NOT enter PRACTITIONER PATH.
+IF Scan P PART 1 fired (earlier agent message had "Women's Pelvic Health" AND practitioner named this turn) -> Scan P PART 1 already halted above. Do NOT enter PRACTITIONER PATH.
+IF Scan P PART 2 fired (earlier agent message asked the pelvic variant gate AND caller answered with new/returning indicator) -> Scan P PART 2 already called confirm_service above. Do NOT enter this STEP further.
 
 IF practitioner named (with or without a service category) -> PRACTITIONER PATH:
   - With CONFLICTING service OR Julie Leaver named with any physio symptom -> MISMATCH CASE (top of PRACTITIONER PATH section).
