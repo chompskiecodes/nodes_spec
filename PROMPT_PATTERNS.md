@@ -116,6 +116,25 @@ If {{info_answered}} == "true":
 **Never write:** `If {{info_answered}} == "true" AND {{appointment_type_id}} != "none": ...` with no else branch.  
 **Never write the OTHERWISE arm as "proceed directly to BOOKING FLOW"** — that bypasses blocking signal evaluation and causes pricing questions to be silently skipped on re-entry.
 
+### +PTV — PRACTITIONER TIER VARIANTS (Senior vs regular within same category)
+**Bug:** A category has multiple online appointment types for the same patient status (e.g. "ACC 30min Return Appointment" AND "ACC Return Appointment - Senior Physio"). Node 2 routes all callers to one type without asking which tier.  
+**Symptom:** Senior Physio callers booked on the regular type. No way to distinguish in the booking record without a separate appointment_type_id.  
+**Detection:** Run the +PTV audit query (see `docs/new_clinic_build.md`). Flag any category where two+ online types exist per patient status and their names differ by a tier keyword (Senior, Clinical Lead, Specialist).  
+**Fix:** Add an extra TURN immediately after the new/returning gate answer:
+```
+TURN N+1 (tier gate): "Were you seeing a Senior Physio or one of our regular practitioners?" HALT. ZERO tool calls.
+TURN N+2 (route):
+  Senior: pending_service = "<category>_senior". Ask location / call confirm_service with Senior appointment_type_id.
+  Regular: pending_service = "<category>_regular". Ask location / call confirm_service with regular appointment_type_id.
+```
+**Key rules:**
+- Each tier gets its own `pending_service` key. Never reuse the same key for both tiers.
+- Both keys must appear in LOCATION GATE (SERVICES AT BOTH LOCATIONS or TAURANGA-ONLY), independently.
+- Both keys must appear in Scan C5 with the correct `appointment_type_id` per tier.
+- If Senior Physio is only available at some locations, its LOCATION GATE placement differs from the regular tier.
+- The tier gate question uses "seeing" (returning patient context) vs "looking to see" (new patient context).
+- Root cause (beyondphysiofitness, 2026-06-15): both Private and ACC return paths were written without this gate.
+
 ---
 
 ## Node 3 — Availability Handler
