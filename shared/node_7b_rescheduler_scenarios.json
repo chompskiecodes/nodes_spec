@@ -1,0 +1,62 @@
+{
+  "_comment": "Tests Node 7b rescheduler routing correctness: reschedule_cancelled vs cancel_intent confusion, abandonment silence, booking success wrap_up contract, and RESCHEDULE BYPASS path.",
+  "scenarios": [
+    {
+      "name": "Signal 0.5 — cancel intent mid-rebook uses reschedule_cancelled not cancel_intent",
+      "history": [
+        {"role": "assistant", "content": "So we're booking you in for another Physiotherapy appointment — is that right?"},
+        {"role": "user", "content": "Actually I want to cancel that other one too."}
+      ],
+      "expected_behavior": "PASS if: agent calls universal_router intent='reschedule_cancelled' with payload {reschedule_mode: '', cancellation_completed: 'none'} and zero spoken output. FAIL if: agent calls intent='cancel_intent' (wrong intent from this node), or speaks any words before routing."
+    },
+    {
+      "name": "ABANDONMENT — caller declines rebook, agent must route silently not farewell aloud",
+      "history": [
+        {"role": "assistant", "content": "So we're booking you in for another Massage appointment — is that right?"},
+        {"role": "user", "content": "No thanks, I'm all good."}
+      ],
+      "expected_behavior": "PASS if: agent calls universal_router intent='wrap_up' with zero spoken output. FAIL if: agent says 'Goodbye' or any farewell phrase before calling the tool, or fails to call the tool at all."
+    },
+    {
+      "name": "BOOKING STEP success — verbatim message + wrap_up in same turn",
+      "history": [
+        {"role": "assistant", "content": "Let me lock that in."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": true, \"message\": \"You're booked in for Physiotherapy on Thursday at 10am with Sarah.\"}"}
+      ],
+      "expected_behavior": "PASS if: agent speaks 'You're booked in for Physiotherapy on Thursday at 10am with Sarah.' verbatim AND calls universal_router intent='wrap_up' in the same turn with zero additional spoken output. FAIL if: agent appends questions, omits the wrap_up tool call, or paraphrases instead of speaking verbatim."
+    },
+    {
+      "name": "RESCHEDULE BYPASS — reschedule_mode=true must skip confirmation question",
+      "history": [
+        {"role": "tool", "content": "[universal_router response]: {\"uni_router_intent\": \"cancellation_done\", \"reschedule_mode\": \"true\", \"appointment_type\": \"Osteopathy\", \"appointment_type_id\": \"123456\"}"}
+      ],
+      "expected_behavior": "PASS if: agent skips all ENTRY confirmation steps and proceeds directly to AVAILABILITY STEP — asks 'What day and time works for you?' without first asking 'So we're booking you in for another Osteopathy — is that right?'. FAIL if: agent asks the confirmation question before asking for day/time."
+    },
+    {
+      "name": "CATEGORY UNKNOWN — 'my appointment' is not a valid category name",
+      "history": [
+        {"role": "assistant", "content": "What type of appointment were you looking to rebook?"},
+        {"role": "user", "content": "The one I just cancelled."}
+      ],
+      "expected_behavior": "PASS if: agent asks 'What type of appointment were you looking to rebook?' again (Signal 0 re-ask) with no tool call. FAIL if: agent accepts 'the one I just cancelled' as a valid category and proceeds to the confirmation question or availability step."
+    },
+    {
+      "name": "POLICY WARNING — caller confirms, agent must speak then re-book with override",
+      "history": [
+        {"role": "assistant", "content": "Let me lock that in."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"reschedule_cancellation_policy_warning\", \"message\": \"Just so you know, because your new appointment is more than 5 days from the original date, the clinic's 216-hour cancellation policy applies and a cancellation fee may apply. Would you still like to go ahead with the reschedule?\"}"},
+        {"role": "assistant", "content": "Just so you know, because your new appointment is more than 5 days from the original date, the clinic's 216-hour cancellation policy applies and a cancellation fee may apply. Would you still like to go ahead with the reschedule?"},
+        {"role": "user", "content": "Yes, go ahead."}
+      ],
+      "expected_behavior": "PASS if: agent says 'Let me lock that in.' AND calls smart_voice_agent intent='book' with confirm_policy_override=true in the same turn. FAIL if: agent omits the spoken phrase before calling the tool, omits confirm_policy_override=true, calls universal_router instead, or asks for a new date/time."
+    },
+    {
+      "name": "POLICY WARNING — caller declines, agent must ABANDON",
+      "history": [
+        {"role": "assistant", "content": "Just so you know, because your new appointment is more than 5 days from the original date, the clinic's 216-hour cancellation policy applies and a cancellation fee may apply. Would you still like to go ahead with the reschedule?"},
+        {"role": "user", "content": "No thanks, forget it."}
+      ],
+      "expected_behavior": "PASS if: agent calls universal_router intent='wrap_up' with zero spoken output (ABANDON path). FAIL if: agent tries to find another slot, re-reads the policy, or speaks any farewell before calling the tool."
+    }
+  ]
+}

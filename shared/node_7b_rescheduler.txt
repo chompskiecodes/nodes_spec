@@ -277,7 +277,7 @@ Route on the caller's single response — no follow-up clarifications. Pick the 
 ## AVAILABILITY STEP
 Ask "What day and time works for [booking_party]?" Wait for the caller's response.
 If only a day is given with no time: ask "What time on [day] would work?" Wait.
-Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the conversation so far.
+Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the conversation so far.
 Call smart_voice_agent:
   intent="availability", called_number, caller_id, conversation_id,
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
@@ -295,12 +295,17 @@ Book immediately — do NOT ask "Would you like to book that?" or seek any confi
   patient_name={{patient_name_raw}}, patient_email={{caller_email}}, booking_for={{booking_for}},
   appointment_date=[selected date], appointment_time=[selected time, HH:MM 24h],
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-  practitioner_id=[from availability resolved_context], business_id=[from availability resolved_context],
-  confirm_policy_override=true.
+  practitioner_id=[from availability resolved_context], business_id=[from availability resolved_context].
   Include appointment_id={{appointment_id}} only if {{appointment_id}} is non-empty.
 
-After book returns success=true: speak the success message from the response verbatim. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. Zero additional spoken output. HALT.
-After book returns success=false: say "Sorry, that slot just became unavailable — let me find you another." Return to AVAILABILITY STEP.
+After book returns — evaluate in order, stop at first match:
+  A. success=true → speak the success message from the response verbatim. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. Zero additional spoken output. HALT.
+  B. success=false AND error="reschedule_cancellation_policy_warning" → speak the message from the response verbatim. Wait for caller.
+     Caller confirms ("yes", "go ahead", "okay", "sure", "yep", "that's fine") → MANDATORY PART 1 (output first, no exceptions): say "Let me lock that in." — then call smart_voice_agent intent="book" with the same params PLUS confirm_policy_override=true. Skipping PART 1 is a failure.
+       If that returns success=true → speak success message verbatim. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. Zero additional spoken output. HALT.
+       If that returns success=false → say "Sorry, that slot just became unavailable — let me find you another." Return to AVAILABILITY STEP.
+     Caller declines ("no", "cancel", "forget it", "no thanks", "don't worry about it") → ABANDON.
+  C. success=false (any other error) → say "Sorry, that slot just became unavailable — let me find you another." Return to AVAILABILITY STEP.
 
 ## ROUTE DIFFERENT
 Call universal_router intent="reschedule_different", called_number, caller_id. Zero spoken output. HALT.
