@@ -71,7 +71,37 @@ Edges:
                   }
             }
       },
-      "backward_condition": null
+      "backward_condition": {
+            "label": "9. Wrap Reschedule direct to 7b",
+            "type": "expression",
+            "expression": {
+                  "type": "and_operator",
+                  "children": [
+                        {
+                              "type": "eq_operator",
+                              "left": {
+                                    "type": "dynamic_variable",
+                                    "name": "wrap_routing_flag"
+                              },
+                              "right": {
+                                    "type": "string_literal",
+                                    "value": "cancel"
+                              }
+                        },
+                        {
+                              "type": "eq_operator",
+                              "left": {
+                                    "type": "dynamic_variable",
+                                    "name": "reschedule_mode"
+                              },
+                              "right": {
+                                    "type": "string_literal",
+                                    "value": "true"
+                              }
+                        }
+                  ]
+            }
+      }
 }
 
   Edge ID: edge_01km0401vse4cr3g72240mmg7n
@@ -277,20 +307,32 @@ Otherwise (reschedule_mode not set — standard post-cancel rebook):
 Route on the caller's single response — no follow-up clarifications. Pick the best interpretation if ambiguous.
 
 ## AVAILABILITY STEP
+DATE LABELING: today_date from {{current_time_local}}. today → "today", today+1 → "tomorrow". All other dates: "[day_of_week] the [ordinal]" (e.g. "Wednesday the 10th").
 Ask "What day and time works for [booking_party]?" Wait for the caller's response.
-If only a day is given with no time: ask "What time on [day] would work?" Wait.
-Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the conversation so far.
+Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the caller's response.
 Call smart_voice_agent:
   intent="availability", called_number, caller_id, conversation_id,
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-  appointment_date=[date], appointment_time=[time].
+  appointment_date=[date].
+  Include appointment_time=[time] only if [time] was extracted.
   Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
+  CRITICAL: appointment_type_id={{appointment_type_id}} is MANDATORY in every smart_voice_agent availability call from this node. Include it whenever {{appointment_type_id}} is not "none" and not empty — regardless of which intent you choose. Sending name only (without ID) causes a backend failure.
 
 After the availability response — evaluate in order, stop at first match:
   A. TIME ALREADY KNOWN: [time] was extracted AND [time] appears verbatim as a slot value in slot_groups — exact character match required ("12:05 PM" must appear in the list; being in the afternoon band does NOT count) → proceed directly to BOOKING STEP with [date] and [time]. No additional question.
-  B. NO SLOTS FOR DATE: [time] was extracted AND slot_groups is empty or absent for the requested date (FNA fallback — backend is offering alternative days, not times) → follow agent_instruction. Offer the days it returned. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day.
-  C. TIME NOT AVAILABLE: [time] was extracted AND slot_groups has slots AND [time] does not appear verbatim in any slot → say "[time] isn't available on [day] — I have [the slot immediately before [time] in the list] or [the slot immediately after [time] in the list] — which would you prefer?" Wait. Then go to BOOKING STEP.
-  D. NO TIME: [time] was not extracted → follow agent_instruction. Present slots by part of day. Ask which the caller prefers. Wait. Then go to BOOKING STEP.
+  B. NO SLOTS FOR DATE: slot_groups is empty or absent (FNA fallback — backend is offering alternative days, not times) → follow agent_instruction. Offer the days it returned. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day.
+  C. TIME NOT AVAILABLE: [time] was extracted AND slot_groups has slots AND [time] does not appear verbatim in any slot → say "[time] isn't available on [day] — I have [the slot immediately before [time] in the list] or [the slot immediately after [time] in the list] — which would you prefer?" Wait. Then go to BOOKING STEP with the chosen time.
+  D. NO TIME: [time] was not extracted AND slot_groups has slots → BAND SELECTION then SLOT OFFER:
+     BAND SELECTION: count distinct bands (morning / afternoon / evening) that have at least 1 slot in slot_groups.
+       1 band present → proceed directly to SLOT OFFER for that band. No question.
+       2+ bands present → ask "Would you prefer [band1] or [band2]?" listing only the bands that have slots. Wait. Caller names a band → SLOT OFFER.
+     SLOT OFFER:
+       TIME PROXIMITY EXCEPTION (check first): if caller said "after [time]", "straight after", "around [time]", "before [time]", "closer to [time]", or "nearer to [time]" at any point this call → offer 1–2 slots nearest to that reference. Say "I've got [nearest]" (1 slot) or "I've got [nearest] or [second nearest]" (2 slots). Include "with [first_name]" once.
+       Otherwise → SLOT OFFER HARD RULE: speak exactly two slots — the first and last in the selected band only.
+         2+ slots: "I've got [first] or [last] — does either of those work?" Include "with [first_name]" on first mention only.
+         1 slot: "[day] [band] I only have [time] — would that work?"
+     AMBIGUOUS RESPONSE: if caller says "yes", "either", or "both" after a two-option offer → ask "Yes the [time1] or yes the [time2]?" Do NOT call any tool.
+     Once caller names a specific time → go to BOOKING STEP with [date] and the chosen [time].
 
 ## BOOKING STEP
 Book immediately — do NOT ask "Would you like to book that?" or seek any confirmation. Say "Let me lock that in." Call smart_voice_agent:
@@ -368,8 +410,8 @@ Caller: "What appointment did I cancel?" (during rescheduler)
 Caller said "Tuesday 3pm" → availability response includes "3 PM" in slot_groups:
 → AVAILABILITY STEP branch A. Do NOT ask "which part of the day". Proceed directly to BOOKING STEP. Say "Let me lock that in." and call smart_voice_agent intent="book".
 
-Caller said "Tuesday" only → availability response returns slots:
-→ AVAILABILITY STEP branch C. Follow agent_instruction. Ask which part of the day they prefer. Wait for selection. Then book.
+Caller said "Tuesday" only → availability response returns slots with morning and afternoon bands:
+→ AVAILABILITY STEP branch D. Two bands present → ask "Would you prefer morning or afternoon?" Caller picks afternoon → SLOT OFFER HARD RULE: "I've got [first] or [last] — does either of those work?" Caller picks a time → BOOKING STEP.
 
 smart_voice_agent book returns success=true:
 → BOOKING STEP. Speak success message verbatim. In same turn call universal_router intent="wrap_up". HALT.
