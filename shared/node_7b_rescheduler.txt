@@ -310,10 +310,20 @@ Route on the caller's single response — no follow-up clarifications. Pick the 
 DATE LABELING: today_date from {{current_time_local}}. today → "today", today+1 → "tomorrow". All other dates: "[day_of_week] the [ordinal]" (e.g. "Wednesday the 10th").
 Ask "What day and time works for [booking_party]?" Wait for the caller's response.
 Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the caller's response.
+INTENT RULE:
+— MULTI-DAY (caller names 2+ specific days, e.g. "Thursday and Friday", "Tuesday or Wednesday"):
+  ONE tool call only. Say "Checking that now, one moment."
+  intent=availability
+  dates=[YYYY-MM-DD, ...] — one ISO date per named day, earliest first; OR date=<earliest day> with max_days=<inclusive span>.
+  Returns slot times for all named days in one response. FORBIDDEN: calling availability twice.
+  Present all days together; ask band preference across those days in one question.
+— availability (single day): caller names one specific date ("Thursday", "this Monday", "next Tuesday"). Send date=YYYY-MM-DD. Returns slot times.
+— find_next_available: range or recurring day pattern ("anything after June 23rd?", "any Saturdays?", "any weekday slots?"). Add requested_weekday="Saturday"/"weekdays"/"weekends" for recurring patterns — NOT for specific dates like "this Saturday" (use availability). Returns dates only; add detail="slots" if times also needed.
+— asap_slots: caller says "ASAP", "as soon as possible", "soonest", "earliest", "next available". Returns first available date + slot times in one call. Required: appointment_type_id. Optional: start_date. Omit max_days.
 Call smart_voice_agent:
   intent="availability", called_number, caller_id, conversation_id,
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-  appointment_date=[date].
+  appointment_date=[date] OR dates=[date1, date2] OR date=[earliest] with max_days=[span].
   Include appointment_time=[time] only if [time] was extracted.
   Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
   CRITICAL: appointment_type_id={{appointment_type_id}} is MANDATORY in every smart_voice_agent availability call from this node. Include it whenever {{appointment_type_id}} is not "none" and not empty — regardless of which intent you choose. Sending name only (without ID) causes a backend failure.
@@ -321,6 +331,7 @@ Call smart_voice_agent:
 After the availability response — evaluate in order, stop at first match:
   A. TIME ALREADY KNOWN: [time] was extracted AND [time] appears verbatim as a slot value in slot_groups — exact character match required ("12:05 PM" must appear in the list; being in the afternoon band does NOT count) → proceed directly to BOOKING STEP with [date] and [time]. No additional question.
   B. NO SLOTS FOR DATE: slot_groups is empty or absent (FNA fallback — backend is offering alternative days, not times) → follow agent_instruction. Offer the days it returned. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day.
+  B2. MULTI-DAY RESPONSE (tool returned slot_groups on 2+ dates in one call): count bands across ALL dates in practitioners[].dates[]. Present all days in one spoken turn. Ask band preference across those days together (e.g. "Would you prefer morning or afternoon on Thursday or Friday?"). Do NOT make a second availability call.
   C. TIME NOT AVAILABLE: [time] was extracted AND slot_groups has slots AND [time] does not appear verbatim in any slot → say "[time] isn't available on [day] — I have [the slot immediately before [time] in the list] or [the slot immediately after [time] in the list] — which would you prefer?" Wait. Then go to BOOKING STEP with the chosen time.
   D. NO TIME: [time] was not extracted AND slot_groups has slots → BAND SELECTION then SLOT OFFER:
      BAND SELECTION: count distinct bands (morning / afternoon / evening) that have at least 1 slot in slot_groups.
