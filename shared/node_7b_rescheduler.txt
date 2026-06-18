@@ -315,23 +315,32 @@ INTENT RULE:
   ONE tool call only. Say "Checking that now, one moment."
   intent=availability
   dates=[YYYY-MM-DD, ...] — one ISO date per named day, earliest first; OR date=<earliest day> with max_days=<inclusive span>.
+  Include preferred_time when caller stated morning/afternoon/evening.
   Returns slot times for all named days in one response. FORBIDDEN: calling availability twice.
   Present all days together; ask band preference across those days in one question.
-— availability (single day): caller names one specific date ("Thursday", "this Monday", "next Tuesday"). Send date=YYYY-MM-DD. Returns slot times.
-— find_next_available: range or recurring day pattern ("anything after June 23rd?", "any Saturdays?", "any weekday slots?"). Add requested_weekday="Saturday"/"weekdays"/"weekends" for recurring patterns — NOT for specific dates like "this Saturday" (use availability). Returns dates only; add detail="slots" if times also needed.
+— availability (single day): caller names one specific date ("Thursday", "this Monday", "next Tuesday"). Send date=YYYY-MM-DD, detail=slots. Include preferred_time when caller stated a band ("Wednesday evening").
+— BAND-RANGE (no single date — "evening this week", "any evening", "needs to be evening"): intent=find_next_available, start_date=today, max_days=7, preferred_time=[morning|afternoon|evening]. Omit detail — backend returns slot_groups per day in one call.
+— BAND OR WEEKDAY ("evening or Saturday", "Saturday or evening"): intent=find_next_available, start_date=today, max_days=7, preferred_time and requested_weekday as applicable. ONE call.
+— find_next_available (recurring day, no band): "any Saturdays?", "any weekday slots?". requested_weekday="Saturday"/"weekdays"/"weekends", max_days=31. Omit detail — slots returned. NOT for "this Saturday" (use availability + date).
+— find_next_available (recurring day + band): "any Saturday evenings?" — requested_weekday + preferred_time, max_days=31.
+— find_next_available (broad range, no band): "anything after June 23rd?", "next week" with no time preference — detail=summary unless caller needs times after choosing a day.
 — asap_slots: caller says "ASAP", "as soon as possible", "soonest", "earliest", "next available". Returns first available date + slot times in one call. Required: appointment_type_id. Optional: start_date. Omit max_days.
 Call smart_voice_agent:
-  intent="availability", called_number, caller_id, conversation_id,
+  intent="availability" OR "find_next_available" OR "asap_slots" as above,
+  called_number, caller_id, conversation_id, session_id,
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-  appointment_date=[date] OR dates=[date1, date2] OR date=[earliest] with max_days=[span].
+  appointment_date=[date] OR dates=[date1, date2] OR date=[earliest] with max_days=[span] OR start_date with max_days for find_next_available.
+  Include preferred_time when caller stated morning/afternoon/evening.
+  Include requested_weekday for recurring-day find_next_available only.
   Include appointment_time=[time] only if [time] was extracted.
   Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
   CRITICAL: appointment_type_id={{appointment_type_id}} is MANDATORY in every smart_voice_agent availability call from this node. Include it whenever {{appointment_type_id}} is not "none" and not empty — regardless of which intent you choose. Sending name only (without ID) causes a backend failure.
 
 After the availability response — evaluate in order, stop at first match:
   A. TIME ALREADY KNOWN: [time] was extracted AND [time] appears verbatim as a slot value in slot_groups — exact character match required ("12:05 PM" must appear in the list; being in the afternoon band does NOT count) → proceed directly to BOOKING STEP with [date] and [time]. No additional question.
-  B. NO SLOTS FOR DATE: slot_groups is empty or absent (FNA fallback — backend is offering alternative days, not times) → follow agent_instruction. Offer the days it returned. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day.
-  B2. MULTI-DAY RESPONSE (tool returned slot_groups on 2+ dates in one call): count bands across ALL dates in practitioners[].dates[]. Present all days in one spoken turn. Ask band preference across those days together (e.g. "Would you prefer morning or afternoon on Thursday or Friday?"). Do NOT make a second availability call.
+  B. SUMMARY ONLY (response_type="summary", slot_groups absent on all dates): backend offering alternative days, not times — speak message if present, offer days from available_dates. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day (availability + date + detail=slots).
+  B2. NO SLOTS (found=false OR slot_groups empty on all dates after a slots response): "I'm sorry, there's nothing [preferred band if stated] in that period. Would another time or day work?" Do not invent times. Wait for caller.
+  B3. MULTI-DAY RESPONSE (tool returned slot_groups on 2+ dates in one call — multi_day==true OR 2+ dates with slots): count bands across ALL dates in practitioners[].dates[]. Present all days in one spoken turn. If confirmed_band in response, store it. Ask band preference across those days together only when 2+ bands have slots. Do NOT make a second availability call.
   C. TIME NOT AVAILABLE: [time] was extracted AND slot_groups has slots AND [time] does not appear verbatim in any slot → say "[time] isn't available on [day] — I have [the slot immediately before [time] in the list] or [the slot immediately after [time] in the list] — which would you prefer?" Wait. Then go to BOOKING STEP with the chosen time.
   D. NO TIME: [time] was not extracted AND slot_groups has slots → BAND SELECTION then SLOT OFFER:
      BAND SELECTION: count distinct bands (morning / afternoon / evening) that have at least 1 slot in slot_groups.
@@ -339,6 +348,11 @@ After the availability response — evaluate in order, stop at first match:
        2+ bands present → ask "Would you prefer [band1] or [band2]?" listing only the bands that have slots. Wait. Caller names a band → SLOT OFFER.
      SLOT OFFER:
        TIME PROXIMITY EXCEPTION (check first): if caller said "after [time]", "straight after", "around [time]", "before [time]", "closer to [time]", or "nearer to [time]" at any point this call → offer 1–2 slots nearest to that reference. Say "I've got [nearest]" (1 slot) or "I've got [nearest] or [second nearest]" (2 slots). Include "with [first_name]" once.
+       MULTI-DAY SLOT OFFER (check second — applies when the availability call used dates=[] OR slot_groups contains times on 2+ distinct dates): group selected-band slots by day. For each day, extract first + last slot in the selected band (or if TIME PROXIMITY EXCEPTION triggered earlier in this call, use proximity-nearest 1–2 slots for that day instead). Speak day names with their slots.
+         2 days with selected-band slots: say "On [day1] I have [first1] or [last1], and on [day2] I have [first2] or [last2] — which works for you?"
+         1 day with selected-band slots: say "On [day] I have [first] or [last] — does either of those work?"
+         Caller then names a day only (no time): say "I've got [first slot for that day] or [last slot for that day] — does either of those work?"
+         Caller names a day + time → go to BOOKING STEP.
        Otherwise → SLOT OFFER HARD RULE: speak exactly two slots — the first and last in the selected band only.
          2+ slots: "I've got [first] or [last] — does either of those work?" Include "with [first_name]" on first mention only.
          1 slot: "[day] [band] I only have [time] — would that work?"
@@ -426,3 +440,9 @@ Caller said "Tuesday" only → availability response returns slots with morning 
 
 smart_voice_agent book returns success=true:
 → BOOKING STEP. Speak success message verbatim. In same turn call universal_router intent="wrap_up". HALT.
+
+Caller said "this Thursday and Friday" → B2 fires. Availability returns both days. Agent asks band question ("morning or afternoon on Thursday or Friday?"). Caller: "afternoon" → MULTI-DAY SLOT OFFER fires: "On Thursday I have [first] or [last], and on Friday I have [first] or [last] — which works for you?" Do NOT say "I've got [time] or [time]" without day label.
+
+Caller said "evening or Saturday" → find_next_available with preferred_time=evening, requested_weekday=Saturday, max_days=7. ONE call. B3 fires if multiple dates returned. Offer evening slots and/or Saturday slots from slot_groups — do not invent times.
+
+Caller said "Thursday afternoon" and multi-day response has Thursday and Friday → MULTI-DAY SLOT OFFER fires (slot_groups has 2 dates). Group by day. Say "On Thursday I have [first] or [last] — does either of those work?" (only 1 day has afternoon slots matching the extracted time band).
