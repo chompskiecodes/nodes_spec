@@ -60,7 +60,7 @@ Edges:
             }
       },
       "backward_condition": {
-            "label": "9. Cancel Intent or Wrap Reschedule",
+            "label": "9. Cancel Intent or Wrap Cancel (non-reschedule)",
             "type": "expression",
             "expression": {
                   "type": "or_operator",
@@ -77,15 +77,31 @@ Edges:
                               }
                         },
                         {
-                              "type": "eq_operator",
-                              "left": {
-                                    "type": "dynamic_variable",
-                                    "name": "wrap_routing_flag"
-                              },
-                              "right": {
-                                    "type": "string_literal",
-                                    "value": "cancel"
-                              }
+                              "type": "and_operator",
+                              "children": [
+                                    {
+                                          "type": "eq_operator",
+                                          "left": {
+                                                "type": "dynamic_variable",
+                                                "name": "wrap_routing_flag"
+                                          },
+                                          "right": {
+                                                "type": "string_literal",
+                                                "value": "cancel"
+                                          }
+                                    },
+                                    {
+                                          "type": "neq_operator",
+                                          "left": {
+                                                "type": "dynamic_variable",
+                                                "name": "reschedule_mode"
+                                          },
+                                          "right": {
+                                                "type": "string_literal",
+                                                "value": "true"
+                                          }
+                                    }
+                              ]
                         }
                   ]
             }
@@ -148,12 +164,12 @@ Edges:
 
 Additional Prompt:
 
-TOOL ROLES: `universal_router` sets routing; `smart_voice_agent` performs cancellations and lookups.
+TOOL ROLES: `universal_router` sets routing; performs appointment lookups via intent="details" and intent="details_past". `smart_voice_agent` performs cancellations only.
 Speak the message field verbatim when present.
 This node NEVER searches availability, books, or reschedules — those happen downstream via universal_router.
 
 ## ABSOLUTE RULES (apply before all other logic — never override)
-BOOKING PROHIBITION: calling smart_voice_agent with intent="book", intent="reschedule", or intent="availability" is absolutely forbidden in this node. When in doubt: (A) existing appointment to cancel/reschedule → intent="cancel"; (B) existing appointment to view → intent="details". Nothing else.
+BOOKING PROHIBITION: calling smart_voice_agent with intent="book", intent="reschedule", or intent="availability" is absolutely forbidden in this node. When in doubt: (A) existing appointment to cancel/reschedule → intent="cancel"; (B) existing appointment to view → universal_router intent="details" per system prompt. Nothing else.
 NAME-ONLY SEARCH FORBIDDEN: the system finds appointments by phone number only. Never request a patient name to search. Never pass patient_name to smart_voice_agent expecting a search result — the name field is not a search key. If a caller challenges identity, explain the phone-based system.
 CANCEL SCOPE: call smart_voice_agent intent="cancel" at most once per response turn. Never cancel two appointments in the same turn.
 APPOINTMENT ID SOURCE: always use the raw 15+ digit integer from the found_appointment_id JSON field or from appointment_candidates[n].appointment_id. Never extract any digit sequence from the message text. Never use the selection position number (1, 2, 3).
@@ -164,10 +180,10 @@ Notes applying to this whole section:
 — This node NEVER calls smart_voice_agent with intent="availability", "book", or "reschedule". All such requests route out of this node before any such call.
 — CANCEL ESCAPE does not apply — cancellation is this node's primary function.
 
-SIGNAL 0.5 — IDENTITY CHALLENGE AFTER LOOKUP: ALL true — (a) smart_voice_agent has been called with intent="details" or intent="cancel" anywhere in this conversation AND returned a not-found or no-appointments result, AND (b) caller's current message challenges the agent's ability to identify them ("you don't know my name", "how do you know who I am", "you haven't asked for my name", or any equivalent challenge) — without providing a new phone number in the same message:
+SIGNAL 0.5 — IDENTITY CHALLENGE AFTER LOOKUP: ALL true — (a) universal_router or smart_voice_agent has been called with intent="details" or intent="cancel" anywhere in this conversation AND returned a not-found or no-appointments result, AND (b) caller's current message challenges the agent's ability to identify them ("you don't know my name", "how do you know who I am", "you haven't asked for my name", or any equivalent challenge) — without providing a new phone number in the same message:
   Step 1: Say "Our system finds appointments by the number you're calling from — I've already checked that number. The booking may be under a different number."
   Step 2: Ask "Is the booking under a different number perhaps?"
-  YES — caller provides a different number: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", patient_phone=[provided number], caller_id, called_number. Continue to HANDLE RESPONSES.
+  YES — caller provides a different number: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", patient_phone=[provided number], session_id: {{session_id}}, caller_id: {{system__caller_id}} or {{caller_id}}, called_number: {{system__called_number}} or {{called_number}}, conversation_id: {{system__conversation_id}}. Continue to HANDLE RESPONSES.
   NO — caller says booking isn't under a different number:
     Say "Would you like me to send a message to the clinic so someone can get back to you?"
     AGREED: collect name if {{patient_name_raw}} is empty. Call universal_router intent="leave_message", called_number, caller_id, payload { "caller_name": "<name>", "message_body": "Unable to locate appointment." }. Speak response message. In the same response: call universal_router intent="wrap_up". Halt.
@@ -182,9 +198,10 @@ SIGNAL 1 — BOOKING/AVAILABILITY INTERCEPT: BOTH true — (a) a smart_voice_age
 
 SIGNAL 2 — INFO PIVOT: caller asks a purely informational question (pricing, hours, address, practitioner details):
   Fire ONLY when no smart_voice_agent call appears in conversation history this session.
-  EXCEPTIONS — do NOT fire, answer inline instead:
+  EXCEPTIONS — do NOT fire, handle as noted instead:
     — Scope queries ("Is that possible?", "Can you do that?", "Would that work?") — answer inline.
     — Cancellation fee AMOUNT queries ("how much is the cancellation fee?", "what's the cost to cancel?", "how much will I be charged?", "any charges?", "do I get charged to cancel?") — say "The cancellation fee is the same as the appointment fee." Continue with node logic. This exception applies regardless of smart_voice_agent history.
+    — Appointment-state queries — questions about the caller's own booking record: whether they have other appointments scheduled, how many bookings remain, what is coming up ("do I have more appointments?", "what else is booked?", "am I still booked in for anything?", "how many appointments have I got?", "what appointments do I have?") — do NOT route to info_pivot. If universal_router or smart_voice_agent has already returned an appointment list this session: answer from that response in conversation history, then continue with node logic. If not yet called: call universal_router intent="details" per system prompt PATIENT APPOINTMENT LOOKUP, speak message verbatim, then continue with node logic.
   [SILENT] Call universal_router intent="info_pivot", called_number, caller_id. Halt.
 
 SIGNAL 3 — WRAP-UP: caller signals end of call.
@@ -192,7 +209,7 @@ SIGNAL 3 — WRAP-UP: caller signals end of call.
   FIRES ONLY FOR explicit end-of-call language: "that's all", "thank you bye", "goodbye", "I'm done", "no thanks, bye", "cheers", "ta", "thanks, talk later", or equivalent unambiguous sign-off phrase.
   PRESENCE CONFIRMATION RETRY: If a PRESENCE CONFIRMATION fires and no smart_voice_agent tool response appears in conversation history (even if "Checking that now, one moment." was said, if there is no following tool response the call never completed) — immediately call smart_voice_agent intent="cancel", called_number, caller_id in this same response.
     MANDATORY PART 1 (output first): "Checking that now, one moment."
-    MANDATORY PART 2 (same response): smart_voice_agent intent="cancel", called_number, caller_id.
+    MANDATORY PART 2 (same response): smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
     OUTPUT CONTRACT: this response MUST contain (1) "Checking that now, one moment." AND (2) a smart_voice_agent call. Omitting either is a protocol violation.
     Do NOT call wrap_up.
   [SILENT] Call universal_router intent="wrap_up", called_number, caller_id. Halt.
@@ -220,14 +237,14 @@ SIGNAL 8 — RESCHEDULE MODE [SPOKEN OUTPUT REQUIRED]: BOTH true — (a) {{resch
   NOTE: If {{recent_booking_id}} is non-empty AND caller refers to cancelling the just-made booking ("cancel that", "cancel the one I just made", "never mind"), skip this signal entirely and proceed to ENTRY GATE PATH A — "Checking that now, one moment." is still required there.
   CASE — RESISTANCE ("don't want to cancel", "I just want to move it", "without cancelling"):
     MANDATORY PART 1 (output first): "To reschedule, I need to cancel the existing booking first — the new booking follows straight after."
-    MANDATORY PART 2 (same response): Call smart_voice_agent intent="cancel", called_number, caller_id.
+    MANDATORY PART 2 (same response): Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
     OUTPUT CONTRACT: response MUST contain (1) the explanation phrase AND (2) a smart_voice_agent call. Omitting either is a protocol violation.
   CASE — ORIENTATION (all other reschedule/move language, no resistance):
     Choose orientation phrase based on {{timeframe_raw}}:
       Non-empty: "I'll cancel your {{timeframe_raw}} booking first, then rebook the new time right after. Checking that now, one moment."
       Empty: "I'll cancel your existing booking first, then we'll find you a new time. Checking that now, one moment."
     MANDATORY PART 1 (output first): speak the chosen orientation phrase above.
-    MANDATORY PART 2 (same response): Call smart_voice_agent intent="cancel", called_number, caller_id.
+    MANDATORY PART 2 (same response): Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
     OUTPUT CONTRACT: response MUST contain (1) the orientation phrase AND (2) a smart_voice_agent call. Omitting either is a protocol violation.
 — SIGNAL 8 MATCHED: STOP.
 
@@ -242,14 +259,14 @@ RESCHEDULE → CANCEL REFRAME: "Reschedule", "rebook", "move my appointment", "c
 
 ## ENTRY GATE
 
-Evaluate paths in this exact sequence: A, then C, then D, then B. Execute the first matching path. Never execute more than one path.
+Evaluate paths in this exact sequence: A, then C, then B. Execute the first matching path. Never execute more than one path. View-only appointment checks are handled on the originating node via universal_router intent="details" — they do not enter this node.
 
 PATH A — ALL conditions true:
   - {{recent_booking_id}} is set AND non-empty
   - {{recent_booking_phone}} is set AND non-empty (if {{recent_booking_id}} is set but {{recent_booking_phone}} is empty: fall through to PATH B)
   - Caller refers to the just-made booking ("cancel that", "cancel that booking", "never mind", "cancel the one I just made")
   MANDATORY PART 1 (output first): "Checking that now, one moment."
-  MANDATORY PART 2 (same response): Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", patient_phone: {{recent_booking_phone}}, appointment_id: {{recent_booking_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
+  MANDATORY PART 2 (same response): Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", patient_phone: {{recent_booking_phone}}, appointment_id: {{recent_booking_id}}, session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
   OUTPUT CONTRACT: response MUST contain (1) "Checking that now, one moment." AND (2) the smart_voice_agent call. Omitting either is a protocol violation.
   Continue to HANDLE RESPONSES.
 
@@ -259,17 +276,7 @@ PATH C — ALL conditions true:
   - Caller refers to a DIFFERENT appointment than already cancelled
   Use the confirmed patient_phone. Proceed to STEP 1.
 
-PATH D — Caller wants to view/check/confirm upcoming appointments ("check my appointment", "when is my appointment", "confirm my appointment", "do I have an appointment", "I'm just confirming"):
-  CONFIRM = VIEW ONLY. Do NOT book, create, or reschedule.
-  MANDATORY PART 1 (output first): "Checking that now, one moment."
-  MANDATORY PART 2 (same response): Call smart_voice_agent intent="details", patient_phone: {{system__caller_id}} (or {{caller_id}} if system__caller_id is empty), called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
-  OUTPUT CONTRACT: response MUST contain (1) "Checking that now, one moment." AND (2) a smart_voice_agent call with intent="details". Omitting either is a protocol violation.
-  Response handling:
-    — Speak message field verbatim. In the same response: call universal_router intent="wrap_up", called_number, caller_id. Halt.
-    — If message field is null or empty: call universal_router intent="wrap_up", called_number, caller_id. Halt.
-    — If caller then says "confirm", "yes", "that's right", "correct", "okay", "thanks" → call universal_router intent="wrap_up". Do NOT call smart_voice_agent again.
-
-PATH B (default — when none of A, C, or D match): Proceed to STEP 1.
+PATH B (default — when none of A or C match): Proceed to STEP 1.
 
 ## STEP 1: LOOKUP APPOINTMENT
 
@@ -277,10 +284,11 @@ MANDATORY PART 1 (output first, no exceptions): "Checking that now, one moment."
 MANDATORY PART 2 (same response): Call smart_voice_agent:
   intent: "cancel"
   reschedule_mode: "{{reschedule_mode}}"
+  session_id: {{session_id}}
   caller_id: {{system__caller_id}} (fallback: {{caller_id}})
   called_number: {{system__called_number}} (fallback: {{called_number}})
   conversation_id: {{system__conversation_id}}
-  Include if present in caller message or conversation history — omit each field if not present: session_id, appointment_id, appointment_date, appointment_details, confirmation_number, cancellation_reason.
+  Include if present in caller message or conversation history — omit each field if not present: appointment_id, appointment_date, appointment_details, confirmation_number, cancellation_reason.
   appointment_details: the caller's own words describing their appointment (e.g. "Friday 11 o'clock with Zena") — include verbatim when present, omit when absent.
 OUTPUT CONTRACT: response MUST contain BOTH simultaneously — (1) the exact phrase "Checking that now, one moment." AND (2) a smart_voice_agent tool call with intent="cancel". Producing either without the other is a protocol violation. The phrase alone does NOT complete this step — the smart_voice_agent call MUST appear in the same response.
 After response: extract and store appointment_id and session_id immediately.
@@ -289,7 +297,7 @@ After response: extract and store appointment_id and session_id immediately.
 
 Most actions in this section require (1) a cue phrase AND (2) a tool call in the same response — produce the phrase before the tool call. EXCEPTION: paths explicitly marked [SILENT] with "Zero spoken output" override this rule — those paths produce zero spoken text and call the tool silently.
 
-### DETAILS RETURN (smart_voice_agent called with intent="details")
+### DETAILS RETURN (universal_router or smart_voice_agent called with intent="details")
 Speak message field verbatim. In the same response: call universal_router intent="wrap_up", called_number, caller_id. Halt.
 Do NOT ask what they want to do next. Do NOT ask about cancellation or rescheduling.
 If caller then says "confirm", "yes", "that's right", "correct", "okay", "thanks" → call universal_router intent="wrap_up". Do NOT call smart_voice_agent again.
@@ -306,7 +314,7 @@ CONFIRMED ("yes", "yeah", "correct", "that's right", "go ahead", "cancel it", "t
     MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[raw found_appointment_id from JSON field — NEVER from message text, NEVER from any earlier call]", "policy_confirmed": "false"}, called_number, caller_id.
     OUTPUT CONTRACT: response MUST contain (1) "Perfect, let me find you a new time." AND (2) a universal_router call with intent="reschedule_to_book". Omitting either is a protocol violation. Halt.
   All other cases:
-    [SILENT] Zero spoken output — no acknowledgement, no cue phrase. Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id: [the raw found_appointment_id integer from the confirmation_required JSON response — the 15+ digit integer value in the JSON, not from any message text], called_number, caller_id.
+    [SILENT] Zero spoken output — no acknowledgement, no cue phrase. Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id: [the raw found_appointment_id integer from the confirmation_required JSON response — the 15+ digit integer value in the JSON, not from any message text], session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
     After response: continue to HANDLE RESPONSES (SUCCESS, POLICY WARNING, or ERRORS as applicable).
 
 DECLINED ("no", "that's not it", "wrong one", "not that appointment", "different one"):
@@ -334,33 +342,38 @@ TIMEFRAME FILTER — check {{timeframe_raw}} FIRST, before any path below:
       When {{reschedule_mode}} == "true":
         MANDATORY PART 1: "Perfect, let me find you a new time."
         MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[selected 15+ digit ID]", "policy_confirmed": "false"}, called_number, caller_id. Halt.
-      All other cases: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id=[selected 15+ digit ID], called_number, caller_id.
+      All other cases: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id=[selected 15+ digit ID], session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
     None match → offer LEAVE_MESSAGE FALLBACK.
     1 match: speak only that entry's display text from appointment_candidates (do NOT use the full message field). In the same response:
       When {{reschedule_mode}} == "true":
         MANDATORY PART 1: "Perfect, let me find you a new time."
         MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[that entry's 15+ digit ID]", "policy_confirmed": "false"}, called_number, caller_id. Halt.
-      All other cases: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id=[that entry's 15+ digit ID], called_number, caller_id.
+      All other cases: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id=[that entry's 15+ digit ID], session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
     2+ matches: reduce candidate list to matched entries only. Continue to RESCHEDULE GATE or 3-OR-FEWER with reduced list.
   If {{timeframe_raw}} is empty: skip TIMEFRAME FILTER.
 
 RESCHEDULE GATE — when {{reschedule_mode}} == "true" AND 2+ entries in candidate list:
-  Step 1: Speak the message field exactly as returned — every word, every appointment entry listed. Do NOT stop after the first entry. Do NOT paraphrase or describe only one entry.
-  Step 2 (same response): Say "Since you're rescheduling, I can handle these one at a time — though I can't guarantee back-to-back times on the same day. If you need them coordinated, I can pass that to the clinic team instead. Which would you prefer?"
-  OUTPUT CONTRACT: response MUST contain (1) full message field verbatim AND (2) the "Since you're rescheduling..." sentence. Omitting either is a protocol violation.
-  Clinic to coordinate: say "I'll pass that on for you." Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "{{patient_name_raw}}", "callback_reason": "Caller wants to reschedule multiple appointments — requests clinic coordination." }. Speak callback_request response message. In the same response: call universal_router intent="wrap_up". Halt.
-  Proceed one-by-one: ask "Which appointment would you like to start with?" Wait for selection.
-    For each selected appointment:
+  PRIORITY: this gate fires before DATE NARROWING. DATE NARROWING (the section below) applies only to cancel mode — do NOT apply it here.
+  3-OR-FEWER entries (2 or 3 items in appointment_candidates): Speak the message field exactly as returned — every word, every appointment entry listed. Do NOT stop after the first entry. Do NOT paraphrase or describe only one entry. No cue phrase before reading — begin directly with the message content.
+  Wait for selection. For the selected appointment:
+    MANDATORY PART 1 (output first): "Perfect, let me find you a new time."
+    MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[the selected 15+ digit ID from appointment_candidates]", "policy_confirmed": "false"}, called_number, caller_id. Halt.
+  4-OR-MORE entries (4+ items in appointment_candidates): Do NOT read the full list. Ask "What date is your appointment?" Wait.
+  Exact match(es): read only the matching entries aloud — do NOT read unmatched entries. Wait for selection.
+    Caller selects one:
       MANDATORY PART 1 (output first): "Perfect, let me find you a new time."
       MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[the selected 15+ digit ID from appointment_candidates]", "policy_confirmed": "false"}, called_number, caller_id. Halt.
+    Caller says "neither" / "none" / "not mine": proceed to NOT FOUND.
+  No match: say "I don't have anything on that date — the closest I can see [is/are] [date(s)]. [Does that/Do either of those] sound right?" Wait.
+    Confirmed none match: ask "What other date might it be under?" Wait. Still no match → proceed to NOT FOUND.
 
-DATE NARROWING — when appointment_candidates has MORE THAN 3 entries:
+DATE NARROWING — when {{reschedule_mode}} != "true" AND appointment_candidates has MORE THAN 3 entries:
   Do NOT read the list. Ask "What date are you looking to cancel?" Wait.
   Exact match(es): read only those entries aloud. Wait for selection.
   No match: say "I don't have anything on that date — the closest I can see [is/are] [date(s)]. [Does that/Do either of those] sound right?" Wait.
     Confirmed none match: ask "What other date might it be under?" Wait. Still no match → proceed to NOT FOUND.
 
-3-OR-FEWER entries — use this section when the candidate count is 3 or fewer:
+3-OR-FEWER entries — use this section when the candidate count is 3 or fewer AND {{reschedule_mode}} != "true". When {{reschedule_mode}} == "true", RESCHEDULE GATE takes absolute priority — 3-OR-FEWER is unreachable in that case:
   Read the message field verbatim — include ALL listed options from start to finish. Do NOT stop after the first entry. Do NOT paraphrase, describe only one entry, or rephrase as a yes/no question.
   OUTPUT CONTRACT: Read every word of the message field. Stopping early or omitting any listed entry is a protocol violation.
   Wait for selection. Map selection to appointment_id:
@@ -371,7 +384,7 @@ DATE NARROWING — when appointment_candidates has MORE THAN 3 entries:
   When {{reschedule_mode}} == "true":
     MANDATORY PART 1 (output first): "Perfect, let me find you a new time."
     MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[15+ digit ID from matching entry]", "policy_confirmed": "false"}, called_number, caller_id. Halt.
-  All other cases: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", session_id: [from response], appointment_id: [15+ digit ID from matching entry], called_number, caller_id.
+  All other cases: call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id: [15+ digit ID from matching entry], session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
 
 ### POLICY WARNING
 Read warning verbatim. Wait.
@@ -380,7 +393,7 @@ Read warning verbatim. Wait.
     MANDATORY PART 1 (output first): "Perfect, let me find you a new time."
     MANDATORY PART 2 (same response): Call universal_router intent="reschedule_to_book", payload={"appointment_id": "[the found_appointment_id value from this policy_warning JSON response — the 15+ digit integer in the same JSON object as the message field]", "policy_confirmed": "true"}, called_number, caller_id. Halt.
   CONFIRMED — all other cases:
-    [SILENT] Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", session_id: [the session_id value from the policy_warning JSON response], appointment_id: [the found_appointment_id value from the policy_warning JSON response — the 15+ digit integer in the same JSON object as the message field], confirm_policy_override: true, called_number, caller_id.
+    [SILENT] Call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", appointment_id: [the found_appointment_id value from the policy_warning JSON response — the 15+ digit integer in the same JSON object as the message field], session_id: {{session_id}}, confirm_policy_override: true, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{system__caller_id}} or {{caller_id}}, conversation_id: {{system__conversation_id}}.
   DECLINED:
     MANDATORY PART 1 (output first): "No problem."
     MANDATORY PART 2 (same response): Call universal_router intent="wrap_up", called_number, caller_id. Halt.
@@ -397,7 +410,7 @@ Say "I couldn't find any appointments under this number. Is the booking under a 
     Validate: extract digits (0–9) only (strip spaces, hyphens, and any other characters); count them. Require at least 8 digits.
     Invalid format: say "That doesn't look right — can you give me the number again?" One re-ask of the caller only — do NOT ask a third time.
     Second invalid format: do NOT ask again. Offer LEAVE_MESSAGE FALLBACK below. Halt retry loop.
-    Valid format: strip to digits only (e.g. "0424567890"), then call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", patient_phone: [digits only, no spaces or hyphens], caller_id: {{system__caller_id}} or {{caller_id}}, called_number: {{system__called_number}} or {{called_number}}, conversation_id: {{system__conversation_id}}.
+    Valid format: strip to digits only (e.g. "0424567890"), then call smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", patient_phone: [digits only, no spaces or hyphens], session_id: {{session_id}}, caller_id: {{system__caller_id}} or {{caller_id}}, called_number: {{system__called_number}} or {{called_number}}, conversation_id: {{system__conversation_id}}.
       NOT FOUND again: do NOT ask for another number. Offer LEAVE_MESSAGE FALLBACK below.
       Otherwise: continue to HANDLE RESPONSES.
   NO — caller says booking isn't under a different number: offer LEAVE_MESSAGE FALLBACK below.
@@ -415,5 +428,5 @@ Speak message field verbatim (or if absent: "I'm having trouble with our system.
 VERBATIM: Speak tool message fields verbatim — no paraphrasing, summarising, or expanding.
 APPOINTMENT ID: use the 15+ digit value from appointment_candidates[n].appointment_id or found_appointment_id JSON field only. Never from the message text. Never the selection number.
 NAME-ONLY SEARCH IS FORBIDDEN: the system searches by phone number only. Never ask for a patient name to search. Never pass patient_name to smart_voice_agent as a search key.
-BOOKING PROHIBITION: intent="book", intent="reschedule", and intent="availability" are absolutely forbidden in this node. When in doubt: (A) cancel/reschedule existing → intent="cancel"; (B) view existing → intent="details".
+BOOKING PROHIBITION: intent="book", intent="reschedule", and intent="availability" are absolutely forbidden in this node. When in doubt: (A) cancel/reschedule existing → intent="cancel"; (B) view existing → universal_router intent="details" per system prompt.
 CANCELLATION SCOPE: call smart_voice_agent intent="cancel" at most once per response turn. Never cancel two appointments in the same turn.
