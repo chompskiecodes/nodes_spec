@@ -286,7 +286,8 @@ BOOKING PARTY: [booking_party] = {{patient_name_raw}} if ({{booking_for}} == "ot
 
 CATEGORY DEFINITION: [category] = the appointment type category name — top-level only (not the variant). Use {{appointment_type}} DV if non-empty; otherwise extract from the most recent successful smart_voice_agent cancel response in conversation history.
 
-RESCHEDULE BYPASS (DV check only — never infer from conversation): If {{reschedule_mode}} == "true" → all appointment context is already set in DVs ({{appointment_type}}, {{appointment_type_id}}, {{practitioner_id}}, {{practitioner_preference}}, {{appointment_id}}). Proceed directly to AVAILABILITY STEP. Do NOT ask any confirmation question.
+RESCHEDULE BYPASS (DV check only — never infer from conversation): If {{reschedule_mode}} == "true" AND {{appointment_type_id}} is non-empty → all appointment context is already set in DVs ({{appointment_type}}, {{appointment_type_id}}, {{practitioner_id}}, {{practitioner_preference}}, {{appointment_id}}). Proceed directly to AVAILABILITY STEP. Do NOT ask any confirmation question. Do NOT call any tool on this entry turn — ask the availability question and HALT.
+If {{reschedule_mode}} == "true" AND {{appointment_type_id}} is EMPTY — DVs were not populated by reschedule_to_book (likely re-entered via wrap_reschedule before the cancel lookup ran). Fall through to the standard path below.
 
 Otherwise (reschedule_mode not set — standard post-cancel rebook):
 1. Read the most recent smart_voice_agent cancel success response in conversation history.
@@ -306,7 +307,7 @@ Route on the caller's single response — no follow-up clarifications. Pick the 
 
 ## AVAILABILITY STEP
 DATE LABELING: today_date from {{current_time_local}}. today → "today", today+1 → "tomorrow". All other dates: "[day_of_week] the [ordinal]" (e.g. "Wednesday the 10th").
-Ask "What day and time works for [booking_party]?" Wait for the caller's response.
+Ask "What day and time works for [booking_party]?" Do NOT call any tool on this turn. HALT — wait for the caller's response before taking any further action.
 Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the caller's response.
 INTENT RULE:
 — MULTI-DAY (caller names 2+ specific days, e.g. "Thursday and Friday", "Tuesday or Wednesday"):
@@ -332,6 +333,7 @@ Call smart_voice_agent:
   Include requested_weekday for recurring-day find_next_available only.
   Include appointment_time=[time] only if [time] was extracted.
   Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
+  Include business_id=stored_business_id if stored_business_id is set; else include business_id={{business_id}} if {{business_id}} is non-empty.
   CRITICAL: appointment_type_id={{appointment_type_id}} is MANDATORY in every smart_voice_agent availability call from this node. Include it whenever {{appointment_type_id}} is not "none" and not empty — regardless of which intent you choose. Sending name only (without ID) causes a backend failure.
 
 After the availability response — evaluate in order, stop at first match:
@@ -357,13 +359,17 @@ After the availability response — evaluate in order, stop at first match:
      AMBIGUOUS RESPONSE: if caller says "yes", "either", or "both" after a two-option offer → ask "Yes the [time1] or yes the [time2]?" Do NOT call any tool.
      Once caller names a specific time → go to BOOKING STEP with [date] and the chosen [time].
 
+STORAGE (after every availability response — silent, zero spoken output):
+Store from resolved_context if present: business_id→stored_business_id, business_name→stored_business_name. Overrides prior values.
+If resolved_context.business_id is absent, store from practitioners[0]: business_id→stored_business_id, business_name→stored_business_name.
+
 ## BOOKING STEP
 Book immediately — do NOT ask "Would you like to book that?" or seek any confirmation. Say "Let me lock that in." Call smart_voice_agent:
   intent="book", called_number, caller_id, conversation_id, session_id={{session_id}},
   patient_name={{patient_name_raw}}, patient_email={{caller_email}}, booking_for={{booking_for}},
   appointment_date=[selected date], appointment_time=[selected time, HH:MM 24h],
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-  practitioner_id={{practitioner_id}}, business_id=[from availability resolved_context].
+  practitioner_id={{practitioner_id}}, business_id=stored_business_id [REQUIRED — stored from the availability response — omitting this field is a protocol violation].
   Include appointment_id={{appointment_id}} only if {{appointment_id}} is non-empty.
 
 After book returns — evaluate in order, stop at first match:
@@ -374,10 +380,10 @@ After book returns — evaluate in order, stop at first match:
        patient_name={{patient_name_raw}}, patient_email={{caller_email}}, booking_for={{booking_for}},
        appointment_date=[same date as the first attempt], appointment_time=[same time as the first attempt, HH:MM 24h],
        appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-       practitioner_id={{practitioner_id}}, business_id=[same business_id as the first attempt],
+       practitioner_id={{practitioner_id}}, business_id=stored_business_id,
        confirm_policy_override=true.
        Include appointment_id={{appointment_id}} only if {{appointment_id}} is non-empty.
-       CRITICAL: copy practitioner_id and business_id from the first attempt exactly — do NOT generate new values.
+       CRITICAL: use the same practitioner_id and stored_business_id as the first attempt — do NOT generate new values.
        Skipping PART 1 is a failure.
        If that returns success=true → speak success message verbatim. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. Zero additional spoken output. HALT.
        If that returns success=false → say "Sorry, that slot just became unavailable — let me find you another." Return to AVAILABILITY STEP.
