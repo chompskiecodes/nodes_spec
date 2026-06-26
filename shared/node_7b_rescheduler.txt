@@ -309,6 +309,8 @@ Route on the caller's single response — no follow-up clarifications. Pick the 
 DATE LABELING: today_date from {{current_time_local}}. today → "today", today+1 → "tomorrow". All other dates: "[day_of_week] the [ordinal]" (e.g. "Wednesday the 10th").
 Ask "What day and time works for [booking_party]?" Do NOT call any tool on this turn. HALT — wait for the caller's response before taking any further action.
 Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the caller's response.
+STICKY BAND: The first time the caller states a clock time or a band this call ("1 PM", "afternoon", "morning sometime", "after 2"), set [sticky_band] = the band that time falls in (before 12 = morning, 12–4:59 PM = afternoon, 5 PM on = evening). Carry [sticky_band] forward on every later turn: include preferred_time=[sticky_band] in each subsequent availability call even when the caller only names a day, and offer that band's slots first. A new explicit time or band from the caller replaces [sticky_band]; "any time", "whenever", "doesn't matter" clears it.
+KNOWN-UNAVAILABLE DAY (check before calling any tool): If the caller names a single day that the most recent availability response in history already showed as unavailable — the named day falls on or after the earliest day that response searched AND it is absent from that response's offered days (available_dates or the days you spoke) — answer from memory with NO tool call: "I don't have anything on [that day] either — the closest I have is [re-read the days or slots you already offered]." Wait. EXCEPTION: if the named day is EARLIER than the earliest day already searched, you have not checked it — call availability for that day with start_date=[that day] so the search re-anchors to cover it.
 INTENT RULE:
 — MULTI-DAY (caller names 2+ specific days, e.g. "Thursday and Friday", "Tuesday or Wednesday"):
   ONE tool call only. Say "Checking that now, one moment."
@@ -329,7 +331,7 @@ Call smart_voice_agent:
   called_number, caller_id, conversation_id, session_id,
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
   appointment_date=[date] OR dates=[date1, date2] OR date=[earliest] with max_days=[span] OR start_date with max_days for find_next_available.
-  Include preferred_time when caller stated morning/afternoon/evening.
+  Include preferred_time when caller stated morning/afternoon/evening, OR when [sticky_band] is set (use preferred_time=[sticky_band]).
   Include requested_weekday for recurring-day find_next_available only.
   Include appointment_time=[time] only if [time] was extracted.
   Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
@@ -338,6 +340,11 @@ Call smart_voice_agent:
 
 After the availability response — evaluate in order, stop at first match:
   A. TIME ALREADY KNOWN: [time] was extracted AND [time] appears verbatim as a slot value in slot_groups — exact character match required ("12:05 PM" must appear in the list; being in the afternoon band does NOT count) → proceed directly to BOOKING STEP with [date] and [time]. No additional question.
+  A2. ANCHOR DAY DENIED (response contains anchor_other_bands): the day the caller just named has no slots in the band they asked for, but it does have slots in another band, and the backend also surfaced a different day. NEVER claim that day is unavailable — offer its other band AND the alternative day in ONE turn:
+     - From anchor_other_bands: name the day (day name + ordinal, e.g. "Wednesday the 8th"), say it has no [the band the caller asked for], then offer the first band in anchor_other_bands.bands starting at the first slot in that band's list ("but I've got the afternoon from 2").
+     - Then from practitioners[].dates[] (the alternative day the backend returned): offer that day's slots per SLOT OFFER HARD RULE — first and last slot.
+     Example: "Wednesday the 8th doesn't have any mornings, but I've got the afternoon from 2 — or Saturday the 11th I have 8:30 or 11:30 in the morning. Which would you prefer?"
+     Wait. Caller picks the anchor day + a time → BOOKING STEP with anchor_other_bands.date and that time. Caller picks the alternative day + a time → BOOKING STEP with that day and time.
   B. SUMMARY ONLY (response_type="summary", slot_groups absent on all dates): backend offering alternative days, not times — speak message if present, offer days from available_dates. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day (availability + date + detail=slots).
   B2. NO SLOTS (found=false OR slot_groups empty on all dates after a slots response): "I'm sorry, there's nothing [preferred band if stated] in that period. Would another time or day work?" Do not invent times. Wait for caller.
   B3. MULTI-DAY RESPONSE (tool returned slot_groups on 2+ dates in one call — multi_day==true OR 2+ dates with slots): count bands across ALL dates in practitioners[].dates[]. Present all days in one spoken turn. If confirmed_band in response, store it. Ask band preference across those days together only when 2+ bands have slots. Do NOT make a second availability call.

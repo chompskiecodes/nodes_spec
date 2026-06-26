@@ -75,6 +75,62 @@
         {"role": "user", "content": "No thanks, forget it."}
       ],
       "expected_behavior": "PASS if: agent calls universal_router intent='wrap_up' with zero spoken output (ABANDON path). FAIL if: agent tries to find another slot, re-reads the policy, or speaks any farewell before calling the tool."
+    },
+    {
+      "name": "RESCHEDULE BYPASS ENTRY — entry turn must ask time question only, no tool call",
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to reschedule my appointment with Jessica today."},
+        {"role": "assistant", "content": "Let's find your booked appointment first."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": true, \"message\": \"Found appointment: Physiotherapy on Thursday June 25 at 11 AM with Jessica Rowe.\", \"appointment_id\": \"appt_12345\", \"appointment_type\": \"Physiotherapy\", \"appointment_type_id\": \"type_789\", \"practitioner_id\": \"prac_456\", \"business_id\": \"bus_123\"}"},
+        {"role": "assistant", "content": "I found your appointment on Thursday, June 25 at 11 AM with Jessica Rowe. Is that the one you'd like to cancel?"},
+        {"role": "user", "content": "Correct, yes."},
+        {"role": "assistant", "content": "Perfect, let me find you a new time."},
+        {"role": "tool", "content": "[universal_router response]: {\"uni_router_intent\": \"wrap_reschedule\", \"reschedule_mode\": \"true\", \"cancellation_completed\": \"false\", \"appointment_type\": \"Physiotherapy\", \"appointment_type_id\": \"type_789\", \"practitioner_id\": \"prac_456\", \"appointment_id\": \"appt_12345\", \"business_id\": \"bus_123\"}"}
+      ],
+      "expected_behavior": "PASS if: agent speaks ONLY 'What day and time works for you?' and makes NO tool call (smart_voice_agent must NOT be called on this entry turn — no cancel, no availability, nothing). FAIL if: agent calls smart_voice_agent or universal_router with any intent before the caller has named a new time, even if agent also asks the time question in the same turn."
+    },
+    {
+      "name": "RESCHEDULE BYPASS ENTRY — after caller names time, THEN call availability",
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to reschedule my appointment with Jessica today."},
+        {"role": "assistant", "content": "Let's find your booked appointment first."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": true, \"message\": \"Found appointment: Physiotherapy on Thursday June 25 at 11 AM with Jessica Rowe.\", \"appointment_id\": \"appt_12345\", \"appointment_type\": \"Physiotherapy\", \"appointment_type_id\": \"type_789\", \"practitioner_id\": \"prac_456\", \"business_id\": \"bus_123\"}"},
+        {"role": "assistant", "content": "I found your appointment on Thursday, June 25 at 11 AM with Jessica Rowe. Is that the one you'd like to cancel?"},
+        {"role": "user", "content": "Correct, yes."},
+        {"role": "assistant", "content": "Perfect, let me find you a new time."},
+        {"role": "tool", "content": "[universal_router response]: {\"uni_router_intent\": \"wrap_reschedule\", \"reschedule_mode\": \"true\", \"cancellation_completed\": \"false\", \"appointment_type\": \"Physiotherapy\", \"appointment_type_id\": \"type_789\", \"practitioner_id\": \"prac_456\", \"appointment_id\": \"appt_12345\", \"business_id\": \"bus_123\"}"},
+        {"role": "assistant", "content": "What day and time works for you?"},
+        {"role": "user", "content": "Friday at 11 AM."}
+      ],
+      "expected_behavior": "PASS if: agent calls smart_voice_agent intent='availability' with date=next Friday's date and appointment_time=11:00, appointment_type_id='type_789', practitioner_id='prac_456'. FAIL if: agent asks a confirmation question ('So we're booking you in for another Physiotherapy — is that right?') instead of calling availability, or calls universal_router instead of smart_voice_agent."
+    },
+    {
+      "name": "ANCHOR DAY DENIED (branch A2) — caller's day has no morning but has afternoon; never claim it's unavailable",
+      "history": [
+        {"role": "assistant", "content": "I don't have anything on Tuesday July seven. Beyond that, I have availability Wednesday July eighth, Thursday July ninth, and Saturday July eleventh. Would another day work?"},
+        {"role": "user", "content": "Is there something Wednesday July eighth in the morning?"},
+        {"role": "tool", "content": "[smart_voice_agent availability response]: {\"success\": true, \"found\": true, \"band_filtered_range\": true, \"multi_day\": true, \"practitioners\": [{\"practitioner_id\": \"120513\", \"practitioner_name\": \"Rebekah\", \"dates\": [{\"date\": \"2026-07-11\", \"day_of_week\": \"Saturday, July 11th\", \"slot_groups\": {\"morning\": [\"8:30 AM\", \"9:15 AM\", \"10 AM\", \"10:45 AM\", \"11:30 AM\"]}}]}], \"anchor_other_bands\": {\"date\": \"2026-07-08\", \"day_of_week\": \"Wednesday, July 8th\", \"practitioner_name\": \"Rebekah\", \"slot_groups\": {\"afternoon\": [\"2 PM\", \"2:45 PM\", \"3:30 PM\"]}, \"bands\": [\"afternoon\"]}}"}
+      ],
+      "expected_behavior": "PASS if: agent offers BOTH Wednesday the 8th afternoon (starting at 2 / 2 PM) AND Saturday the 11th morning (8:30 and 11:30) in one turn, then waits. FAIL if: agent says Wednesday the 8th is unavailable / has nothing, OR offers only Saturday and drops Wednesday entirely, OR invents Wednesday morning times."
+    },
+    {
+      "name": "STICKY BAND (Fix B) — caller stated 1 PM earlier; bare day later must carry preferred_time=afternoon",
+      "history": [
+        {"role": "assistant", "content": "What day and time works for you?"},
+        {"role": "user", "content": "Tuesday the 7th at 1 PM."},
+        {"role": "tool", "content": "[smart_voice_agent availability response]: {\"success\": true, \"found\": true, \"response_type\": \"summary\", \"available_dates\": [{\"date\": \"2026-07-09\", \"day_of_week\": \"Thursday, July 9th\"}], \"message\": \"I don't have anything on Tuesday July 7. Beyond that, I have Thursday July 9th.\"}"},
+        {"role": "assistant", "content": "I don't have anything on Tuesday the 7th. Beyond that I have Thursday the 9th. Would another day work?"},
+        {"role": "user", "content": "Yeah let's try Thursday."}
+      ],
+      "expected_behavior": "PASS if: agent calls smart_voice_agent intent='availability' for Thursday 2026-07-09 with preferred_time='afternoon' carried forward from the caller's earlier '1 PM'. FAIL if: agent omits preferred_time, or sends preferred_time='morning' or any band other than afternoon."
+    },
+    {
+      "name": "KNOWN-UNAVAILABLE DAY (Fix D) — day already shown unavailable, answer from memory with no tool call",
+      "history": [
+        {"role": "assistant", "content": "I don't have anything on Tuesday the 7th. Beyond that I have Wednesday the 8th, Thursday the 9th, and Saturday the 11th. Would another day work?"},
+        {"role": "user", "content": "What about Friday the 10th?"}
+      ],
+      "expected_behavior": "PASS if: agent answers from memory that Friday the 10th has nothing either and re-offers the 8th, 9th, and 11th, making NO tool call (Friday the 10th is within the already-searched window and was not offered). FAIL if: agent calls smart_voice_agent for Friday the 10th, or claims Friday the 10th is available."
     }
   ]
 }
