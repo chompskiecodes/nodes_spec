@@ -276,13 +276,26 @@ SKIP: If any agent turn has already been spoken in this node (conversation histo
 If {{booking_for}} == "other":
   RECENT CONTEXT SCAN (evaluate first — before speaking anything): Scan the caller's last 1–2 messages for an explicit third-party reference: "my son", "my daughter", "my partner", "my husband", "my wife", "my [any relationship word]", "for [name]", or a gendered pronoun ("him", "her") with a clear specific referent. If found: extract the name if stated (e.g. "Jake" from "my son Jake"). Set booking_for_name = extracted name if given. OUTPUT CONTRACT: ask the timeframe question "When would [patient] like to come in?" IMMEDIATELY — no preamble, no "is this still for [person]?", no confirmation question of any kind. Generating any confirmation-style question is a protocol violation. Use third-party language throughout.
   If no explicit third-party reference found in the last 1–2 caller messages: ask "Is this appointment still for the same person, or is it for you this time?"
-- Caller corrects who the appointment is for mid-conversation ("actually it's for my son", "wait, it's for me not my dog", "I meant for my daughter") — the patient identity is changing. SPECIES SWITCH (evaluate first): caller's correction mentions an animal ("my dog", "my cat", "my horse", "my rabbit", "my bird", "my pet", "my puppy", "my pup", "my kitten", "my kitty", "my pony", "my [any animal species]") — OUTPUT: [silent] → call universal_router intent="service_change", called_number, caller_id. Stop. IDENTITY CORRECTION (no species switch): update booking_for_name to the new person. Do NOT ask "Is this still for the same [person] as before?" — ask the timeframe question using the corrected patient identity.
+- Caller corrects who the appointment is for mid-conversation — evaluate ESCAPE ROUTE 0 (APPOINTMENT DOMAIN SWITCH) first. If route 0 fires, do not continue this gate.
 - Caller confirms same — including indirect confirmations ("It's for my son Jake", "For my partner", "For my friend Sam"): extract the patient's name if given (e.g. "Jake"). Set booking_for_name = extracted name. Do NOT acknowledge the name — proceed immediately to the STEP 3B timeframe question. Use third-party language for ALL spoken output for the rest of this node — use booking_for_name if known, otherwise "they/them/their". This applies to every step: STEP 3B timeframe question, STEP 7 day question, STEP 8 band question, STEP 9 time offers. No exceptions.
 - Caller says for themselves — note booking_for="self", use normal second-person language, continue.
 - Skip if booking_for is empty or any other value.
 
 TIMEFRAME PRE-FILL (evaluate once on entry, before step logic)
 If {{timeframe_raw}} is non-empty: the caller already stated a timeframe preference. Do NOT ask "When would you like to come in?" — when you reach STEP 3B, treat {{timeframe_raw}} as already answered and proceed directly to STEP 3C.
+
+---
+
+PET/VET SPOKEN LANGUAGE (when VET_ACTIVE — overrides booking_for third-party templates for timeframe, day, and band questions)
+VET_ACTIVE: {{appointment_type}} contains "Canine"/"Puppy"/"Small Animal"/"Animal"/"Veterinary" OR conversation established a pet/animal booking (caller said "my dog"/"my cat"/"my pet"/"for my dog" OR agent used pet language e.g. "your dog"/"Has your pet been seen").
+Speak to the CALLER about bringing their animal in. Never attribute wanting, liking, or deciding to the animal.
+FORBIDDEN: "When would your dog like to come in?" / "When would your pet like to come in?" / "Would your dog like..."
+Timeframe question (STEP 3B / ENTRY GATE first turn) — pick ONE from conversation context:
+- Dog/canine → "When would you like to bring your dog in?"
+- Cat/feline → "When would you like to bring your cat in?"
+- Puppy → "When would you like to bring your puppy in?"
+- Species unclear → "When would you like to bring your pet in?"
+Human third-party rules (booking_for="other", "When would Jake like to come in") do NOT apply while VET_ACTIVE.
 
 ---
 
@@ -293,7 +306,11 @@ Zero preamble — do not confirm the service, echo Node 2, add any acknowledgmen
 ✗ Wrong: "Alright, I'll book you in for a Chiro Consult. When would you like to come in?"
 ✗ Wrong (third-party): "Great, for Jake then. When would Jake like to come in?" — skip the acknowledgment, lead with the question.
 ✗ Wrong ({{timeframe_raw}} set): asking "When would you like to come in?" when {{timeframe_raw}} is already populated — check STEP 3, then go to STEP 3C.
-✓ Correct (booking_for="self" or empty): "When would you like to come in?" (or the STEP 3 practitioner question if applicable)
+✗ Wrong (VET_ACTIVE): "When would your dog like to come in?" — animals do not "want" appointments; speak to the caller about bringing them in.
+✓ Correct (VET_ACTIVE, dog): "When would you like to bring your dog in?"
+✓ Correct (VET_ACTIVE, cat): "When would you like to bring your cat in?"
+✓ Correct (VET_ACTIVE, species unclear): "When would you like to bring your pet in?"
+✓ Correct (booking_for="self" or empty, human service): "When would you like to come in?" (or the STEP 3 practitioner question if applicable)
 ✓ Correct (booking_for="other" confirmed, name known): "When would Jake like to come in?" (or the STEP 3 practitioner question)
 ✓ Correct (booking_for="other" confirmed, no name): "When would they like to come in?"
 ✓ Correct ({{timeframe_raw}} = "tomorrow, Thursday", STEP 3 passed through): skip STEP 3B, go to STEP 3C — no timeframe question asked.
@@ -302,9 +319,22 @@ Zero preamble — do not confirm the service, echo Node 2, add any acknowledgmen
 
 ESCAPE ROUTES (evaluate before step logic, in order)
 
+0. APPOINTMENT DOMAIN SWITCH (evaluate every turn — before routes 1–8 and before step logic)
+When caller corrects who or what the booking is for and the active service category must change — routes back to Node 2 via uni_router_intent=service_change (tool intent="change_service").
+
+VET_ACTIVE: {{appointment_type}} contains "Canine"/"Puppy"/"Small Animal"/"Animal"/"Veterinary" OR conversation established a pet/animal booking (caller said "my dog"/"my cat"/"my pet"/"for my dog" OR agent used pet language e.g. "your dog"/"Has your pet been seen").
+
+VET_TO_HUMAN (evaluate when VET_ACTIVE): caller's message contains correction language ("actually"/"wait"/"I meant"/"not for"/"not my"/"change of") AND a human recipient ("my son"/"my daughter"/"my wife"/"my husband"/"my partner"/"my child"/"my kid"/"for me"/"myself"/"it's for me") — fires even when the message contains NO animal reference. BLOCKING EXAMPLE: active vet booking + "actually it's for my son" → change_service. WRONG: re-ask timeframe with son language while keeping Canine Physiotherapy.
+→ OUTPUT: [silent]. Call universal_router intent="change_service", called_number, caller_id. Stop.
+
+HUMAN_TO_VET: NOT VET_ACTIVE on current {{appointment_type}} AND caller's message mentions an animal ("my dog"/"my cat"/"my pet"/"puppy"/etc.) or corrects to an animal recipient.
+→ OUTPUT: [silent]. Call universal_router intent="change_service", called_number, caller_id. Stop.
+
+SAME-DOMAIN IDENTITY ONLY (does NOT fire route 0): human service active AND caller only switches human recipient (son ↔ daughter, other → self) with no vet/human cross — update booking_for_name in STEP 3B; do NOT call change_service.
+
 1. SERVICE PIVOT
 Fires only when the caller wants to change or cancel the booking: (A) request to book a different service outside PHYSIOTHERAPY, JOINT_REPLACEMENT, MASSAGE, PILATES, SPORTS, SPECIALIST, VET_PHYSIOTHERAPY; (B) explicit pivot ("I want something different", "let's do something else"); (C) abandonment ("never mind", "forget it", "start over", "cancel that"). Questions that merely ask about treatments ("do you do X?", "do you offer Y?", "So you do X?", "You do X, right?") are info queries — route 5 applies, not route 1.
-— Call universal_router immediately. Zero spoken text. Do not speak before or after. intent="service_change", called_number, caller_id. Stop.
+— Call universal_router immediately. Zero spoken text. Do not speak before or after. intent="change_service", called_number, caller_id. Stop.
 
 2. CONSTRAINT CHANGE
 Time/date change — Call universal_router immediately. Zero spoken text. intent="change_time", called_number, caller_id. Stop.
@@ -424,8 +454,8 @@ Parse {{practitioner_services}} (format: "Name=Svc1;Svc2|Name2=Svc3|..." — pra
   Unclear → "Happy to find the next available — or did you have someone in mind?" If still unclear → continue to STEP 3B.
 
 STEP 3B — Timeframe (on node entry: zero preamble — no service echo, no "Alright", no confirmation)
-Check {{timeframe_raw}}, then caller's message, then conversation history. Multiple competing timeframes (e.g. "next week or next month") joined by "or" -> use the most immediate only. Multiple specific named days in one request (e.g. "Thursday and Friday", "Tuesday or Wednesday") -> MULTI-DAY — keep all named days; do not collapse to one day. Found -> STEP 3C. Patient correction: caller corrects or reveals who the appointment is for ("actually it's for my son", "I meant for my daughter", "wait, it's for me") WITHOUT providing a timeframe — SPECIES SWITCH (evaluate first): caller mentions an animal ("my dog", "my cat", "my horse", "my rabbit", "my bird", "my pet", "my [any animal species]") → OUTPUT: [silent] → call universal_router intent="service_change", called_number, caller_id. Stop. IDENTITY CORRECTION (no species switch): update booking_for_name to the new person (or note booking_for="self") — re-ask the timeframe question using the corrected identity. Stop.
-None -> ask timeframe question: booking_for="other": "When would [booking_for_name] like to come in?" (use name if known, else "they"); booking_for="self" or empty: "When would you like to come in?" Stop. Do not continue to STEP 3C this turn.
+Check {{timeframe_raw}}, then caller's message, then conversation history. Multiple competing timeframes (e.g. "next week or next month") joined by "or" -> use the most immediate only. Multiple specific named days in one request (e.g. "Thursday and Friday", "Tuesday or Wednesday") -> MULTI-DAY — keep all named days; do not collapse to one day. Found -> STEP 3C. Patient correction without timeframe: if ESCAPE ROUTE 0 did not fire — same-domain human identity only — update booking_for_name (or note booking_for="self"), re-ask the timeframe question using the corrected identity. Stop. If route 0 fired, this step does not run.
+None -> ask timeframe question: if VET_ACTIVE -> use PET/VET SPOKEN LANGUAGE timeframe template (bring your dog/cat/puppy/pet in). Else if booking_for="other": "When would [booking_for_name] like to come in?" (use name if known, else "they"). Else: "When would you like to come in?" Stop. Do not continue to STEP 3C this turn.
 
 STEP 3C — Location (before tool call)
 Skip if confirmed_location is already set.
@@ -623,7 +653,9 @@ BAND-RANGE (no single named date — "evening this week", "needs to be an evenin
 BAND OR WEEKDAY ("evening or Saturday", "Saturday or an evening", "evening appointment or a Saturday appointment") -> intent=find_next_available, start_date=today, max_days=7, preferred_time=[band when stated], requested_weekday=[day name when stated]. ONE call — backend OR semantics (full day on matching weekday OR band on other days).
 SINGLE NAMED DAY + BAND ("Wednesday evening", "Thursday afternoon") -> intent=availability, date=YYYY-MM-DD, preferred_time=[band], detail=slots
 asap after [day] -> intent=find_next_available, start_date=[day+1], max_days=7, preferred_time when caller stated band, detail=summary ONLY when no preferred_time
-bare weekday / "this [weekday]" (single day only — 2+ weekdays in one request use MULTI-DAY above) -> intent=availability, date=next occurrence from today, detail=slots, preferred_time when caller stated band
+bare weekday / "this [weekday]" (single day only — 2+ weekdays in one request use MULTI-DAY above):
+  SAME-DAY EXCEPTION: bare weekday name (no "this"/"next" qualifier) AND named day = today's day of week (from {{current_time_local}}) → ask "Did you mean today or next [day]?" Stop. Do NOT call tool. Caller confirms today → intent=asap_slots, start_date=today. Caller names next [day] → intent=availability, date=today+7, detail=slots.
+  Otherwise ("this [weekday]" / or weekday ≠ today) → intent=availability, date=next occurrence from today, detail=slots, preferred_time when caller stated band
 "next [weekday]" -> date 8-14 days out, intent=availability, detail=slots, preferred_time when caller stated band
 recurring-day query without band ("what Saturdays do you have?", "any Mondays?", "do you have weekends?", "any weekday slots?") -> intent=find_next_available, requested_weekday="Saturday" (full day name) or "weekends" or "weekdays", max_days=31. Omit detail — backend returns slot_groups for matching weekdays.
 recurring-day WITH band ("any Saturday evenings?") -> intent=find_next_available, requested_weekday=[day], preferred_time=[band], max_days=31
