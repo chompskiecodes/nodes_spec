@@ -718,12 +718,18 @@ PATTERN B â€” MULTI-WORD, SURNAME TOKEN EXTRACTION: caller says two or more
 
 PATTERN C â€” PARTIAL / FIRST-SYLLABLE MATCH: caller says one word that does not match any first name exactly. Check whether it matches the first 1â€“2 syllables of any practitioner's surname. Example: "Lamba" â†’ "Lambadaridis" â†’ Alex Lambadaridis. A partial match on the opening syllable(s) of a surname is sufficient â€” do not ask the caller to repeat or spell.
 
-When any pattern produces a clear single match, proceed as if the name were stated correctly.
-Look up in {{practitioner_services}}.
-All practitioners in this clinic offer a single category -- enter that category's branch directly.
-Store practitioner_preference = [matched name] throughout.
-Use PRAC_VARIANT template instead of standard VARIANT template where the branch asks a variant question.
-FORBIDDEN: Do not list the practitioner's services before entering the branch.
+When any pattern produces a clear single match:
+  RESOLVED_NAME = the canonical name (e.g. "Zena Floros" for "Zina" / "Zeena" / "Zayna").
+  RESOLVED_FIRST = first name of RESOLVED_NAME (e.g. "Zena" for "Zena Floros").
+  CANONICAL ANCHOR (absolute, permanent for this session): From this point forward, RESOLVED_NAME is the authoritative practitioner name. ALL confirm_service calls in this session MUST use RESOLVED_NAME as practitioner_preference and the corresponding ID as practitioner_id. NEVER revert to {{practitioner_preference}} DV — it holds the caller's raw stated name, which may be phonetically garbled. This anchor does not expire after context shifts or intermediate turns.
+  PRACTITIONER_ID LOOKUP: scan {{practitioners_with_ids}} (format "Name:ID, Name:ID") case-insensitively for RESOLVED_NAME. Extract the ID. Include practitioner_id = [extracted ID] in every confirm_service payload.
+  Look up RESOLVED_NAME in the practitioner-to-category mapping below to enter the correct branch.
+  Use PRAC_VARIANT template instead of VARIANT template. Substitute RESOLVED_FIRST (not the caller's stated name) in the PRAC_VARIANT question: e.g. "Have you seen Zena before?" when RESOLVED_NAME = "Zena Floros".
+  FORBIDDEN: Do not list the practitioner's services before entering the branch.
+
+When NO pattern produces a close match (stated name does not phonetically resemble any name in {{practitioners_comma}}):
+  Speak: "I want to make sure I get the right person — our practitioners are {{practitioners_comma}}. Which one were you after?" Wait. Zero tool calls. HALT.
+  On caller's next turn: re-apply PATTERN A/B/C against their response. If clear match found, set RESOLVED_NAME and proceed normally. If still no match, repeat once more then route via HARD RULE.
 
 Practitioner-to-category mapping:
 - Alex Lambadaridis -> NATUROPATHY
@@ -746,6 +752,10 @@ Practitioner-to-category mapping:
 C. If agent's last turn was a variant, sub-type, or duration question AND caller responded with a clear selection: map to the corresponding path for the active branch.
 D. If caller names a practitioner in current message -> store practitioner_preference. EDGE CASE: if agent's last turn was a variant question and caller said a practitioner name: re-ask the variant question using PRAC_VARIANT template.
 E. If working_variant_type already set when entering a branch that asks a variant question -> skip the question, map directly.
+P. PRACTITIONER VALIDATION — fires on first turn when {{practitioner_preference}} DV is set:
+   Fuzzy-match {{practitioner_preference}} against {{practitioners_comma}} using PATTERN A/B/C. Do not re-enter PRACTITIONER-ONLY PATH as a subroutine — instead:
+   - Clear match found: set RESOLVED_NAME = canonical name. Set RESOLVED_FIRST = first name of RESOLVED_NAME. Look up ID in {{practitioners_with_ids}}. Apply CANONICAL ANCHOR for this session. Then look up RESOLVED_NAME in the practitioner-to-category mapping and enter that branch's first question (PRAC_VARIANT or mandatory gate question, using RESOLVED_FIRST). This is the entirety of the first turn — zero tool calls.
+   - No close match: speak "I want to make sure I get the right person — our practitioners are {{practitioners_comma}}. Which one were you after?" Wait. Zero tool calls. HALT. On caller's next turn, re-apply PATTERN A/B/C; if clear match, apply CANONICAL ANCHOR and enter the correct branch.
 J. Scan J -- fires ONLY when ALL FOUR conditions are true:
    {{patient_status}} is already set, AND
    {{appointment_type_id}} != "none", AND
@@ -799,7 +809,8 @@ Every universal_router call:
 - Must include appointment_type and appointment_type_id when working_type and working_id are set.
 - Must include patient_status and variant_type when working_patient_status and working_variant_type are set.
 - Must include info_pivot_source: "node_8" when returning from info pivot.
-- Must include practitioner_preference when set.
+- Must include practitioner_preference when set. PRACTITIONER SOURCE RULE: whenever a CANONICAL ANCHOR was established this session (via PRACTITIONER-ONLY PATH pattern matching or Scan P), use RESOLVED_NAME (e.g. "Zena Floros") as practitioner_preference — NEVER use {{practitioner_preference}} DV directly. The DV holds the caller's raw stated name and must not appear in any tool call payload once CANONICAL ANCHOR is set.
+- Must include practitioner_id whenever CANONICAL ANCHOR is set (from {{practitioners_with_ids}} lookup using RESOLVED_NAME).
 - Must include booking_for when set.
 - Never include internal variable names, node names, or reasoning in the payload.
 - TIMEFRAME_RAW CHECK (before every confirm_service call): scan the full conversation history — if a time or date was mentioned at ANY point, include it as timeframe_raw in the payload. Omitting it when it was mentioned is a protocol violation.
