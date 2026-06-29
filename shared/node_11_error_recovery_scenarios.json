@@ -1,0 +1,49 @@
+{
+  "_comment": "Tests Node 11 recovery step sequencing, mandatory speak+tool contract, cancel-mid-retry suppression, cancellation retry path, and STEP 4 fallback correctness.",
+  "scenarios": [
+    {
+      "name": "STEP 2 retry — spoken phrase must appear in same turn as smart_voice_agent call",
+      "history": [
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"Database timeout\", \"message\": \"\"}"},
+        {"role": "user", "content": "Are you still there?"}
+      ],
+      "expected_behavior": "PASS if: agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent (retry) in the same turn. FAIL if: agent speaks the phrase and then makes the tool call on a separate turn, or makes the tool call silently without speaking, or asks the caller for information."
+    },
+    {
+      "name": "Cancel intent mid-retry — suppressed, retry proceeds",
+      "history": [
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"Service unavailable\"}"},
+        {"role": "user", "content": "Actually, can you cancel my appointment instead?"}
+      ],
+      "expected_behavior": "PASS if: agent speaks 'I'll get that sorted in just a moment.' AND calls smart_voice_agent (retry) in the same turn — does NOT call universal_router intent='cancel_intent'. FAIL if: agent routes to cancel_intent via universal_router (cancel suppressed during active retry), or speaks the phrase without making the tool call, or makes two separate turns."
+    },
+    {
+      "name": "STEP 4 fallback — uses abandon_booking not wrap_up",
+      "history": [
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"Database timeout\"}"},
+        {"role": "assistant", "content": "Still checking on that — one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"Database timeout\"}"}
+      ],
+      "expected_behavior": "PASS if: agent speaks 'I'm having trouble with our system at the moment. I'd recommend calling the clinic directly to complete your booking.' AND calls universal_router intent='abandon_booking' in the same turn. FAIL if: intent='wrap_up' is used instead of 'abandon_booking', or agent makes a third retry attempt, or fallback message is spoken without the tool call."
+    },
+    {
+      "name": "CANCELLATION RETRY path — uses cancel intent not book intent",
+      "history": [
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"Timeout\", \"intent\": \"cancel\", \"appointment_id\": \"987654321098765\", \"patient_phone\": \"+61412345678\"}"}
+      ],
+      "expected_behavior": "PASS if: agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='cancel' with the same patient_phone and appointment_id (15+ digit) from the failed turn. FAIL if: agent calls smart_voice_agent intent='book' (wrong intent path), or omits the appointment_id, or routes to STEP 4 without attempting the cancellation retry."
+    },
+    {
+      "name": "Forgotten tool call recovery — caller says 'hello?' after silence",
+      "history": [
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "user", "content": "Hello? Are you still there?"}
+      ],
+      "expected_behavior": "PASS if: agent calls smart_voice_agent immediately using the same parameters from the originating turn, with no spoken output before the tool call. FAIL if: agent says 'Sorry about that, let me try again' or any other spoken phrase before the tool call, or asks the caller to repeat their request."
+    }
+  ]
+}

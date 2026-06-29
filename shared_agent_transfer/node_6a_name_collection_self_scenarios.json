@@ -1,0 +1,70 @@
+{
+  "_comment": "Scenario probes for IHW node 6a (self-booking, Qwen) — same failure modes as shared/node_6a plus IHW-specific Signal 6 live-transfer via transfer_to_number (minority tool vs dominant universal_router).",
+  "scenarios": [
+    {
+      "name": "S1 — Execute signal (Signal 8) produces speech and smart_voice_agent after email decline",
+      "history": [
+        {"role": "user",      "content": "Hi, I'd like to book an appointment."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "Sarah Kowalski"},
+        {"role": "assistant", "content": "So that's Sarah Kowalski — is that right?"},
+        {"role": "user",      "content": "Yes, that's right."},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "No, I don't have one."}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly 'Checking that now, one moment.' AND calls smart_voice_agent with intent='book'. FAIL if agent speaks the phrase without the smart_voice_agent tool call. FAIL if smart_voice_agent is called silently with no spoken output (ESCAPE ROUTE HARD RULE bleed). FAIL if agent re-asks for email or asks any further question."
+    },
+    {
+      "name": "S2 — Email decline with 'nah' recognised; Signal 8 fires with both speech and tool",
+      "history": [
+        {"role": "user",      "content": "Tom Brennan, need a booking."},
+        {"role": "assistant", "content": "So that's Tom Brennan — is that right?"},
+        {"role": "user",      "content": "Yep."},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "Nah."}
+      ],
+      "expected_behavior": "PASS if agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' ('nah' is a listed decline, Signal 8 fires). FAIL if agent re-asks for email ('Do you have an email address?') — 'nah' is a clear decline per the signal trigger list. FAIL if smart_voice_agent is called silently with no spoken phrase."
+    },
+    {
+      "name": "S3 — Known-caller Signal 4 fast-path: all three DVs populated on node entry",
+      "history": [
+        {"role": "user", "content": "Hi yes, go ahead and book me in."}
+      ],
+      "expected_behavior": "PASS if agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' (Signal 4 fires: caller_first_name, caller_last_name, and caller_email DVs are all non-empty; no prior smart_voice_agent call). FAIL if agent asks 'What's your full name for the booking?' (ignored DV values). FAIL if smart_voice_agent is called silently without the required spoken output."
+    },
+    {
+      "name": "S4 — Signal 6 live transfer: transfer_to_number used, NOT universal_router (minority-tool LOCK test)",
+      "history": [
+        {"role": "user",      "content": "What's your full name for the booking?"},
+        {"role": "assistant", "content": "Actually — can I speak to someone at the reception?"},
+        {"role": "user",      "content": "Sure, I need to speak to someone there."}
+      ],
+      "expected_behavior": "PASS if agent speaks 'I'll transfer you now.' AND calls transfer_to_number (not universal_router) with transfer_number={{transfer_number}} (Signal 6 TOOL LOCK respected). FAIL if agent calls universal_router intent='leave_message' or any other universal_router intent (Qwen drifted to the dominant tool; transfer_to_number is minority in this node). FAIL if agent speaks 'I'll transfer you now.' without making the transfer_to_number tool call. FAIL if agent says 'I'm not able to transfer calls directly' (wrong Signal 6 branch — that text is from shared/, not IHW)."
+    },
+    {
+      "name": "S5 — Post-booking constraint change (Signal 9): universal_router used, not smart_voice_agent",
+      "history": [
+        {"role": "user",      "content": "James Oduya"},
+        {"role": "assistant", "content": "So that's James Oduya — is that right?"},
+        {"role": "user",      "content": "Yes."},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "james at gmail dot com"},
+        {"role": "assistant", "content": "So that's J, A, M, E, S at gmail dot com — is that right?"},
+        {"role": "user",      "content": "Yes."},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool",      "content": "[smart_voice_agent response]: {\"success\": true, \"message\": \"You're confirmed for Tuesday the 17th at 10 AM with Dr Singh.\"}"},
+        {"role": "assistant", "content": "You're confirmed for Tuesday the 17th at 10 AM with Dr Singh."},
+        {"role": "user",      "content": "Actually, can we do Wednesday instead?"}
+      ],
+      "expected_behavior": "PASS if agent speaks 'I'm sorry about that — let me cancel that booking and rebook you straight away.' AND calls universal_router intent='cancel_intent' with payload reschedule_mode=true (Signal 9 TOOL LOCK on universal_router respected). FAIL if agent calls smart_voice_agent (prior booking context primed Qwen toward smart_voice_agent). FAIL if agent asks 'What day would you prefer?' without any tool call."
+    },
+    {
+      "name": "S6 — Signal 4 fires on social phrase after APPOINTMENT CONFIRMATION",
+      "history": [
+        {"role": "assistant", "content": "Perfect, 1 PM Friday the 19th with Mark at The Bob Ward Physiotherapy Clinic."},
+        {"role": "user",      "content": "Thank you."}
+      ],
+      "expected_behavior": "PASS if agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' (Signal 4 fires because caller_first_name, caller_last_name, and caller_email DVs are all non-empty — DV-BASED TRIGGER means 'Thank you' does NOT suppress the signal). FAIL if agent says 'You're welcome!' or any wrap-up phrase without calling smart_voice_agent (social phrase incorrectly treated as conversation ender). FAIL if agent asks 'What's your full name for the booking?' (re-collected name despite DVs populated). FAIL if smart_voice_agent is called silently without spoken output."
+    }
+  ]
+}
