@@ -25,7 +25,8 @@ Every clinic agent uses these same node IDs:
 | 1 (entry router) | `gemini-3.1-flash-lite` | Migrated from claude-haiku-4-5; fleet-wide entry router (verified 2026-06-05) |
 | 2 (service resolution) | `claude-haiku-4-5` | HALT-critical; gpt-4.1-mini fails |
 | 3 (availability) | `gpt-4.1` | All clinics; P1/P2/P3 templates in `node3_templates/`; migrated from haiku 2026-06-04 (audit 92/100 vs haiku 72/100) |
-| 6a/6b/6c (name collect) | `claude-haiku-4-5` | |
+| 6a/6b (name collect) | `qwen35-397b-a17b` | See `.claude/rules/qwen-prompt-patterns.md` |
+| 6c (family booking confirm) | `gemini-2.5-flash` | Migrated from claude-haiku-4-5 (nodes submodule commit 40b3b6a) |
 | 7 (cancellation) | `claude-sonnet-4-6` | Migrated from gpt-4.1 2026-06-15; 8/8 scenarios PASS; no TURN MODES required; MANDATORY PART 1/2 + [SILENT] pattern |
 | 7b (rescheduler) | `gpt-5.4-nano` | Migrated 2026-05-29; 10/10 scaffold tests |
 | 8 (information) | `gpt-4.1` | Migrated from claude-haiku-4-5 2026-06-04; 92/100 GPT-4.1 self-audit vs 72/100 Haiku; fleet structural improvements applied |
