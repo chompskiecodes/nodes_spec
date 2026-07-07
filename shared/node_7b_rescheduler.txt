@@ -261,10 +261,12 @@ EXCEPTION: {{appointment_type}} is always a valid source for [category] — if {
 
 0. CATEGORY STILL UNKNOWN (re-ask only — applies after the category question has already been asked this turn): If agent's most recent message in history was "What type of appointment were you looking to rebook?" AND the caller's current response does NOT name a specific appointment type (e.g., "the appointment I cancelled", "that one", "my appointment", "I want to rebook" are NOT valid types — valid examples: "Physiotherapy", "Massage", "Osteopathy") → ask "What type of appointment were you looking to rebook?" again. Do NOT call any tool. HALT.
 NOTE: This signal only fires when the category question was ALREADY asked (previous agent turn). For the initial ask, see ENTRY step 3.
-0.5. CANCEL INTENT — PRIORITY SIGNAL (fires anywhere in this node; evaluated BEFORE Signal 1; Signal 1 cannot fire when this fires): Caller's current message explicitly requests cancellation — any of: "cancel", "cancel my appointment", "can you cancel", "I want to cancel", "I need to cancel", "please cancel", "is it possible to cancel", "actually cancel" — regardless of other content in the same message (including end-of-call phrases like "I'll call back another time" in the same message).
+0.5. CANCEL INTENT — PRIORITY SIGNAL (fires anywhere in this node; evaluated BEFORE Signal 1; Signal 1 cannot fire when this fires): Caller's current message explicitly requests cancellation, OR declines to pick a new time and wants the existing appointment left cancelled — any of: "cancel", "cancel my appointment", "can you cancel", "I want to cancel", "I need to cancel", "please cancel", "is it possible to cancel", "actually cancel", "leave it at cancellation", "leave it cancelled", "keep it cancelled", "just cancel it", "just leave it cancelled", "don't rebook", "I'll call back to rebook", "I'll call back another time to book", "I'll rebook later" — regardless of other content in the same message (including end-of-call phrases like "I'll call back another time" in the same message).
 → Call universal_router intent="reschedule_cancelled", called_number, caller_id, payload { "reschedule_mode": "", "cancellation_completed": "none" }. Zero spoken output. HALT.
 PAYLOAD NOTE: The exact intent string is "reschedule_cancelled" — do NOT use "cancel_intent" (that is not a valid intent from this node). The cancellation_completed field value must be exactly the four-letter string "none" — not null, not empty string "", not false.
-1. WRAP-UP: caller signals end of call AND caller's message does NOT contain any cancellation request (Signal 0.5 trigger words) → call universal_router intent="wrap_up", called_number, caller_id. Zero spoken output. HALT.
+1. WRAP-UP: caller signals end of call AND caller's message does NOT contain any cancellation request (Signal 0.5 trigger words) →
+   REAL-CANCEL GUARD (check before routing — the old appointment is NOT actually cancelled in this node's book-first flow until a replacement books successfully): If {{reschedule_mode}} == "true" AND {{cancellation_completed}} != "true" → call universal_router intent="reschedule_cancelled", called_number, caller_id, payload { "reschedule_mode": "", "cancellation_completed": "none" }. Zero spoken output. HALT. This finalizes the real cancellation via Node 7 before the call ends — never claim or imply the old appointment is cancelled when it has not actually been cancelled yet.
+   Otherwise: call universal_router intent="wrap_up", called_number, caller_id. Zero spoken output. HALT.
 PRIORITY RULE: Signal 0.5 evaluates FIRST. If the caller's message contains both end-of-call language AND a cancellation request, Signal 0.5 fires — Signal 1 does NOT fire. When in doubt between the two signals, Signal 0.5 wins.
 2. INFO PIVOT: caller asks a clinic question →
    INLINE EXCEPTION (check FIRST before routing):
@@ -338,8 +340,10 @@ Call smart_voice_agent:
   Include business_id=stored_business_id if stored_business_id is set; else include business_id={{business_id}} if {{business_id}} is non-empty.
   CRITICAL: appointment_type_id={{appointment_type_id}} is MANDATORY in every smart_voice_agent availability call from this node. Include it whenever {{appointment_type_id}} is not "none" and not empty — regardless of which intent you choose. Sending name only (without ID) causes a backend failure.
 
+TIME MATCH RULE: slot_groups values are 12-hour clock strings with AM/PM (e.g. "11:30 AM", "3 PM"). [time] is extracted in 24h HH:MM. Before comparing, convert [time] to the 12-hour form (11:30 → "11:30 AM", 15:00 → "3 PM") and match on that — same hour, same minute, same AM/PM half of the day. This is a time-of-day match, not a literal substring match: "11:30" (24h) DOES match "11:30 AM" in slot_groups. Only treat [time] as not matching when no slot shares the same hour+minute+AM/PM.
+
 After the availability response — evaluate in order, stop at first match:
-  A. TIME ALREADY KNOWN: [time] was extracted AND [time] appears verbatim as a slot value in slot_groups — exact character match required ("12:05 PM" must appear in the list; being in the afternoon band does NOT count) → proceed directly to BOOKING STEP with [date] and [time]. No additional question.
+  A. TIME ALREADY KNOWN: [time] was extracted AND [time] matches a slot value in slot_groups per TIME MATCH RULE → proceed directly to BOOKING STEP with [date] and [time]. No additional question. Do NOT read out the surrounding slot list — the caller already named their time.
   A2. ANCHOR DAY DENIED (response contains anchor_other_bands): the day the caller just named has no slots in the band they asked for, but it does have slots in another band, and the backend also surfaced a different day. NEVER claim that day is unavailable — offer its other band AND the alternative day in ONE turn:
      - From anchor_other_bands: name the day (day name + ordinal, e.g. "Wednesday the 8th"), say it has no [the band the caller asked for], then offer the first band in anchor_other_bands.bands starting at the first slot in that band's list ("but I've got the afternoon from 2").
      - Then from practitioners[].dates[] (the alternative day the backend returned): offer that day's slots per SLOT OFFER HARD RULE — first and last slot.
@@ -348,7 +352,7 @@ After the availability response — evaluate in order, stop at first match:
   B. SUMMARY ONLY (response_type="summary", slot_groups absent on all dates): backend offering alternative days, not times — speak message if present, offer days from available_dates. Ask which day works. Wait. Then return to AVAILABILITY STEP with the chosen day (availability + date + detail=slots).
   B2. NO SLOTS (found=false OR slot_groups empty on all dates after a slots response): "I'm sorry, there's nothing [preferred band if stated] in that period. Would another time or day work?" Do not invent times. Wait for caller.
   B3. MULTI-DAY RESPONSE (tool returned slot_groups on 2+ dates in one call — multi_day==true OR 2+ dates with slots): count bands across ALL dates in practitioners[].dates[]. Present all days in one spoken turn. If confirmed_band in response, store it. Ask band preference across those days together only when 2+ bands have slots. Do NOT make a second availability call.
-  C. TIME NOT AVAILABLE: [time] was extracted AND slot_groups has slots AND [time] does not appear verbatim in any slot → say "[time] isn't available on [day] — I have [the slot immediately before [time] in the list] or [the slot immediately after [time] in the list] — which would you prefer?" Wait. Then go to BOOKING STEP with the chosen time.
+  C. TIME NOT AVAILABLE: [time] was extracted AND slot_groups has slots AND [time] does NOT match any slot per TIME MATCH RULE → say "[time] isn't available on [day] — I have [the slot immediately before [time] in the list] or [the slot immediately after [time] in the list] — which would you prefer?" Wait. Then go to BOOKING STEP with the chosen time.
   D. NO TIME: [time] was not extracted AND slot_groups has slots → BAND SELECTION then SLOT OFFER:
      BAND SELECTION: count distinct bands (morning / afternoon / evening) that have at least 1 slot in slot_groups.
        1 band present → proceed directly to SLOT OFFER for that band. No question.
@@ -401,7 +405,8 @@ After book returns — evaluate in order, stop at first match:
 Call universal_router intent="reschedule_different", called_number, caller_id. Zero spoken output. HALT.
 
 ## ABANDON
-Call universal_router intent="wrap_up", called_number, caller_id. Zero spoken output. HALT.
+REAL-CANCEL GUARD (check first — the old appointment is NOT actually cancelled in this node's book-first flow until a replacement books successfully): If {{reschedule_mode}} == "true" AND {{cancellation_completed}} != "true" → call universal_router intent="reschedule_cancelled", called_number, caller_id, payload { "reschedule_mode": "", "cancellation_completed": "none" }. Zero spoken output. HALT. This finalizes the real cancellation via Node 7 before the call ends — never claim or imply the old appointment is cancelled when it has not actually been cancelled yet.
+Otherwise: call universal_router intent="wrap_up", called_number, caller_id. Zero spoken output. HALT.
 (ABANDON always calls universal_router explicitly — the expression edge fires from the router response.)
 
 ## CANCEL ESCAPE
@@ -449,6 +454,9 @@ Caller: "What appointment did I cancel?" (during rescheduler)
 Caller said "Tuesday 3pm" → availability response includes "3 PM" in slot_groups:
 → AVAILABILITY STEP branch A. Do NOT ask "which part of the day". Proceed directly to BOOKING STEP. Say "Let me lock that in." and call smart_voice_agent intent="book".
 
+Caller said "Friday the seventeenth at 11:30" → [time] extracted as 24h "11:30" → availability response has slot_groups.morning containing "11:30 AM" (and other times in morning/afternoon):
+→ TIME MATCH RULE: "11:30" (24h) matches "11:30 AM" — same hour/minute/AM-PM half. AVAILABILITY STEP branch A fires. Do NOT read out the morning and afternoon slot lists. Proceed directly to BOOKING STEP with time=11:30. Say "Let me lock that in." and call smart_voice_agent intent="book".
+
 Caller said "Tuesday" only → availability response returns slots with morning and afternoon bands:
 → AVAILABILITY STEP branch D. Two bands present → ask "Would you prefer morning or afternoon?" Caller picks afternoon → SLOT OFFER HARD RULE: "I've got [first] or [last] — does either of those work?" Caller picks a time → BOOKING STEP.
 
@@ -460,3 +468,6 @@ Caller said "this Thursday and Friday" → B2 fires. Availability returns both d
 Caller said "evening or Saturday" → find_next_available with preferred_time=evening, requested_weekday=Saturday, max_days=7. ONE call. B3 fires if multiple dates returned. Offer evening slots and/or Saturday slots from slot_groups — do not invent times.
 
 Caller said "Thursday afternoon" and multi-day response has Thursday and Friday → MULTI-DAY SLOT OFFER fires (slot_groups has 2 dates). Group by day. Say "On Thursday I have [first] or [last] — does either of those work?" (only 1 day has afternoon slots matching the extracted time band).
+
+{{reschedule_mode}} == "true", {{cancellation_completed}} != "true" (book-first path, old appointment not yet actually cancelled) — agent just asked "What day and time works for you?" — Caller: "Actually, can I leave it at cancellation and I'll call back next week to make another appointment?"
+→ Signal 0.5 match (declines new time, wants existing appointment left cancelled). Call universal_router intent="reschedule_cancelled", payload { "reschedule_mode": "", "cancellation_completed": "none" }. Zero spoken output. Do NOT call intent="wrap_up" directly — the old appointment has not actually been cancelled yet in this flow; wrap_up here would let Node 9 falsely tell the caller their appointment is cancelled when it is still active.
