@@ -1,5 +1,5 @@
 {
-  "_comment": "Scenario probes for P2 full (multi-practitioner preference, multi-location): covers STEP 3 practitioner disambiguation, silent confirm_time escape route, cross-object slot prohibition in MULTI-PRACTITIONER OFFER, STEP 3C location ask, and asap_slots with practitioner+location in payload.",
+  "_comment": "Scenario probes for P2 full (multi-practitioner preference, multi-location): covers STEP 3 practitioner disambiguation, filler-phrase-then-confirm_time (per shared system_prompt TOOL-CALL FILLER rule — no true silence), cross-object slot prohibition in MULTI-PRACTITIONER OFFER, STEP 3C location ask, and asap_slots with practitioner+location in payload.",
   "scenarios": [
     {
       "name": "P1 — STEP 3 practitioner ask: agent asks preference when 2+ practitioners match service",
@@ -9,7 +9,7 @@
       "expected_behavior": "PASS if agent asks 'Did you want to book with [A] or [B], or is anyone fine?' (listing the practitioners who offer osteopathy per {{practitioner_services}}) before asking about location or timeframe. FAIL if agent skips practitioner question and immediately asks location or timeframe — STEP 3 must fire when 2+ practitioners match the service."
     },
     {
-      "name": "C1 — Confirmation: SILENT universal_router confirm_time with zero spoken output",
+      "name": "C1 — Confirmation: filler phrase AND universal_router confirm_time in the same turn",
       "history": [
         {"role": "user",      "content": "Emma preferred"},
         {"role": "assistant", "content": "Which location suits you — Balmain or Lane Cove?"},
@@ -21,7 +21,7 @@
         {"role": "assistant", "content": "I've got 8:30 AM or 10:00 AM with Emma — does either of those work for you?"},
         {"role": "user",      "content": "10am please"}
       ],
-      "expected_behavior": "PASS if: (1) agent produces ZERO spoken output AND (2) calls universal_router intent='confirm_time' with appointment_date='2026-06-17', appointment_time='10:00', practitioner_id='prac_e', business_id='biz_balmain' in the SAME silent response. FAIL if agent speaks a confirmation phrase (e.g. 'Perfect, 10:00 AM Wednesday') — p2 full CONFIRMATION is a SILENT escape route; Node 6a/6b speaks the confirmation aloud."
+      "expected_behavior": "PASS if: (1) agent speaks ONLY a short filler phrase from the TOOL-CALL FILLER set ('One moment.' / 'Just a sec.' / 'Let me check that.' or equivalent) AND (2) calls universal_router intent='confirm_time' with appointment_date='2026-06-17', appointment_time='10:00', practitioner_id='prac_e', business_id='biz_balmain' in the SAME response. FAIL if the agent is truly silent (no filler phrase at all), FAIL if the agent speaks anything beyond the filler phrase (booking claims like 'you're booked', appointment details like time/day/practitioner name, or 'anything else?'), FAIL if it calls smart_voice_agent instead of universal_router, FAIL if the filler phrase and the tool call are split across two separate turns."
     },
     {
       "name": "S1 — Multi-practitioner offer: cross-object prohibition and first/last per practitioner",
@@ -44,6 +44,230 @@
         {"role": "user",      "content": "Next Tuesday"}
       ],
       "expected_behavior": "PASS if agent asks 'Which location suits you — [list locations]?' before calling smart_voice_agent — STEP 3C fires when confirmed_location is not set and multiple locations exist in {{locations_comma}}. FAIL if agent says 'Checking that now, one moment.' and calls smart_voice_agent without first asking for the location."
+    },
+    {
+      "name": "PC1 — Practitioner change: filler phrase + universal_router intent='change_practitioner' in the same turn",
+      "history": [
+        {"role": "user",      "content": "Emma preferred"},
+        {"role": "assistant", "content": "Which location suits you — Balmain or Lane Cove?"},
+        {"role": "user",      "content": "Balmain"},
+        {"role": "assistant", "content": "When would you like to come in?"},
+        {"role": "user",      "content": "Wednesday morning"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool",      "content": "[smart_voice_agent response]: {\"found\": true, \"response_type\": \"availability\", \"session_id\": \"sess_abc\", \"first_available\": {\"practitioner_name\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\", \"business_id\": \"biz_balmain\", \"business_name\": \"Balmain Osteo\", \"date\": \"2026-06-17\", \"day_of_week\": \"Wednesday\", \"time\": null}, \"practitioners\": [{\"practitioner_name\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\", \"dates\": [{\"date\": \"2026-06-17\", \"slot_groups\": {\"morning\": [\"8:30 AM\", \"10:00 AM\"]}, \"business_id\": \"biz_balmain\", \"business_name\": \"Balmain Osteo\"}]}]}"},
+        {"role": "assistant", "content": "I've got 8:30 AM or 10:00 AM with Emma — does either of those work for you?"},
+        {"role": "user",      "content": "Actually, can I see David instead?"}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase from the TOOL-CALL FILLER set (e.g. 'One moment.' / 'Just a sec.' / 'Let me check that.') AND calls universal_router intent='change_practitioner' in the SAME response — ESCAPE ROUTE 2 (CONSTRAINT CHANGE, practitioner change) requires the filler phrase per the shared system_prompt TOOL-CALL FILLER rule, which overrides this node's prior 'zero spoken text' wording. FAIL if agent speaks more than a filler phrase (e.g. describes the change or asks a clarifying question), is truly silent, splits the phrase and tool call across two turns, or calls smart_voice_agent instead."
+    },
+    {
+      "name": "D1 — DETAILS_PAST result: STEP 2 stores practitioner silently, skips STEP 3, proceeds toward timeframe/location",
+      "history": [
+        {"role": "user",      "content": "Can I book with the same person I saw last time?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool",      "content": "[universal_router response, intent=details_past]: {\"practitioner_preference\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\"}"}
+      ],
+      "expected_behavior": "PASS if the agent fuzzy-matches 'Emma Walsh' against practitioners, silently stores confirmed_practitioner and confirmed_practitioner_id (no announcement of the match), skips the STEP 3 practitioner-preference question entirely, and continues to STEP 3B/3C — asking the TIMEFRAME QUESTION ('When would you like to come in?') if {{timeframe_raw}} is empty, or the STEP 3C location question if timeframe is already known but location is not. FAIL if the agent re-asks 'Did you want someone in particular, or is anyone fine?', announces the practitioner match before asking the next question, or asks anything beyond the single next unresolved question."
+    },
+    {
+      "name": "D2 — DETAILS_PAST result with timeframe_raw already set: location question must fire before smart_voice_agent call",
+      "history": [
+        {"role": "user",      "content": "Book me in next Tuesday with whoever I saw last time"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool",      "content": "[universal_router response, intent=details_past]: {\"practitioner_preference\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\"}"}
+      ],
+      "expected_behavior": "PASS if the agent fuzzy-matches 'Emma Walsh', silently stores confirmed_practitioner and confirmed_practitioner_id, skips the STEP 3 practitioner-preference question, and — because {{timeframe_raw}} is already set ('next Tuesday') but confirmed_location is NOT set — asks the STEP 3C location question ('Which location suits you — [list]?') BEFORE calling smart_voice_agent. FAIL if the agent calls smart_voice_agent (or says 'Checking that now, one moment.' as a lead-in to the tool call) without first asking which location, or if it asks the timeframe question again despite {{timeframe_raw}} already being set."
+    },
+    {
+      "name": "ENTRY-1 — WHO IS IT FOR: third party named directly in first message, no confirmation question asked",
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to book my son Jake in for a chiro appointment."}
+      ],
+      "expected_behavior": "PASS if the RECENT CONTEXT SCAN extracts 'Jake' from 'my son Jake', sets booking_for_name='Jake', and the very next thing the agent says is either the STEP 3 practitioner-preference question (if 2+ practitioners match chiro) or the timeframe question in third person ('When would Jake like to come in?') — either is acceptable, but under no circumstances should the agent ask a confirmation question about who the booking is for. FAIL if agent asks 'Is this appointment still for the same person, or is it for you this time?' (reserved for when no third-party reference is found), or if it acknowledges/echoes the name ('Great, for Jake then') before asking the next question."
+    },
+    {
+      "name": "ENTRY-2 — WHO IS IT FOR: ambiguous, must ask the confirmation question",
+      "history": [
+        {"role": "user", "content": "I'd like to book a chiro appointment."}
+      ],
+      "expected_behavior": "PASS if the agent asks exactly 'Is this appointment still for the same person, or is it for you this time?' — this fires when {{booking_for}}='other' but the caller's message contains no explicit third-party reference. FAIL if the agent skips this question and goes straight to STEP 3 (practitioner preference) or the timeframe question without first resolving who the booking is for."
+    },
+    {
+      "name": "ENTRY-3 — SAME-DOMAIN IDENTITY ONLY: human-to-human correction does not call change_service",
+      "history": [
+        {"role": "assistant", "content": "When would you like to come in?"},
+        {"role": "user", "content": "Actually it's for my daughter Emma, not me."}
+      ],
+      "expected_behavior": "PASS if the agent recognizes this as SAME-DOMAIN IDENTITY ONLY (human service active, caller only switches human recipient) — it does NOT call universal_router intent='change_service', and instead updates booking_for_name='Emma' and re-asks the timeframe question in third person: 'When would Emma like to come in?' FAIL if the agent calls universal_router intent='change_service' for this same-domain correction, or continues in second person as if nothing changed."
+    },
+    {
+      "name": "ENTRY-4 — VET_TO_HUMAN domain switch: correction to a human recipient during an active vet booking",
+      "history": [
+        {"role": "assistant", "content": "When would you like to bring your dog in?"},
+        {"role": "user", "content": "Actually, wait — it's for my son, not the dog."}
+      ],
+      "expected_behavior": "PASS if the agent recognizes VET_TO_HUMAN (correction language 'wait'/'actually' AND a human recipient 'my son') and speaks one filler phrase from the TOOL-CALL FILLER set, then calls universal_router intent='change_service', called_number, caller_id in the SAME response. Stop. FAIL if the agent re-asks a timeframe question using son-language while still treating the appointment as Canine Physiotherapy, continues the vet booking flow, or omits the change_service call."
+    },
+    {
+      "name": "ESC-TREAT-1 — INFO PIVOT inline exception: confirmed treatment type answered inline, not routed",
+      "history": [
+        {"role": "assistant", "content": "Do you have a preference for who you'd like to see, or shall I find the next available?"},
+        {"role": "user", "content": "Actually, quick question — do you also do dry needling?"}
+      ],
+      "expected_behavior": "PASS if {{SERVICE_CATEGORIES}} names dry needling or a clear synonym (e.g. acupuncture) and the agent answers briefly confirming it, then re-asks the practitioner-preference question that was pending — without calling universal_router. FAIL if the agent routes this to intent='info_pivot' despite the treatment being confirmable from {{SERVICE_CATEGORIES}} alone."
+    },
+    {
+      "name": "ESC-PRICE-1 — Plain pricing question is NOT info_pivot",
+      "history": [
+        {"role": "assistant", "content": "Which location suits you — Balmain or Lane Cove?"},
+        {"role": "user", "content": "Actually, how much does this cost?"}
+      ],
+      "expected_behavior": "PASS if the agent does NOT call universal_router intent='info_pivot' for this plain cost question — a bare pricing/cost/fee question is owned directly by the system prompt's PRICING QUERY block (get_service_price), not this node's INFO PIVOT route. FAIL if the agent routes intent='info_pivot' for a plain 'how much does it cost?' question."
+    },
+    {
+      "name": "ESC-PIVOT-1 — SERVICE PIVOT: abandonment language routes to change_service, not abandon_availability",
+      "history": [
+        {"role": "assistant", "content": "Which location suits you — Balmain or Lane Cove?"},
+        {"role": "user", "content": "Actually, never mind, forget it."}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='change_service', called_number, caller_id in the same response — ESCAPE ROUTE 1(C) treats 'never mind'/'forget it' as abandonment routed through SERVICE PIVOT. FAIL if the agent asks a clarifying question first, or calls intent='abandon_availability' instead (that intent is reserved for AVAILABILITY ABANDON — declining all offered TIME options, not abandoning the booking attempt itself)."
+    },
+    {
+      "name": "ESC-PIVOT-2 — SERVICE PIVOT EXCLUSION: slot already offered + alternatives already exhausted, bare abandonment routes to AVAILABILITY ABANDON not change_service",
+      "history": [
+        {"role": "assistant", "content": "I've got 10:00 AM or 2:00 PM with Emma on Wednesday — does either of those work for you?"},
+        {"role": "user", "content": "No, that doesn't work for me."},
+        {"role": "assistant", "content": "I also have Thursday, Friday — would any of those work for you?"},
+        {"role": "user", "content": "Actually, never mind, forget it."}
+      ],
+      "expected_behavior": "A time slot has already been offered this call (10:00 AM / 2:00 PM with Emma), the caller declined once, EXHAUSTED OPTIONS already fired and offered Thursday/Friday as alternatives, and the caller is now declining that too with pure abandonment language, naming no different service or treatment. PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='abandon_availability' — this is ESCAPE ROUTE 3b (DECLINE AFTER ALTERNATIVES OFFERED): the prior turn already spoke EXHAUSTED OPTIONS phrasing, so a repeat decline routes to AVAILABILITY ABANDON, not SERVICE PIVOT and not another round of EXHAUSTED OPTIONS. FAIL if the agent calls intent='change_service' instead (that would incorrectly eject the caller into service reselection after they were already mid-booking with a slot on the table), or if it treats this as a first decline and offers yet another alternative day instead of abandoning. Contrast with ESC-PIVOT-1, which tests the same phrase BEFORE any slot has been offered — there, change_service is correct. Contrast with RESP-EXHAUST-1, which tests the FIRST decline after a slot is offered (no EXHAUSTED OPTIONS spoken yet) — there, the correct route is EXHAUSTED OPTIONS, not abandon_availability."
+    },
+    {
+      "name": "PIVOT-WEEKDAY-2 — EARLIER DATE SEARCH: requested_weekday preserved with generic 'anything sooner' phrasing (no day named), practitioner/location retained",
+      "history": [
+        {"role": "user", "content": "Do you have any Tuesdays free with Emma at Balmain?"},
+        {"role": "assistant", "content": "Let me check that."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"found\": true, \"response_type\": \"find_next_available\", \"session_id\": \"sess_tue3\", \"practitioners\": [{\"practitioner_name\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\", \"dates\": [{\"date\": \"2026-06-30\", \"day_of_week\": \"Tuesday\", \"slot_groups\": {\"morning\": [\"9:00 AM\", \"10:00 AM\"]}, \"business_id\": \"biz_balmain\", \"business_name\": \"Balmain Osteo\"}]}]}"},
+        {"role": "assistant", "content": "I've got Tuesday the 30th with 9:00 AM or 10:00 AM with Emma — does either of those work?"},
+        {"role": "user", "content": "Hmm, is there anything sooner than that?"}
+      ],
+      "expected_behavior": "requested_weekday='Tuesday' is active from the earlier 'any Tuesdays' request, confirmed_practitioner='Emma Walsh'/prac_e and confirmed_location='Balmain'/biz_balmain are already set, and a slot has already been offered. The caller's rephrasing ('anything sooner') does not repeat the word 'Tuesday'. PASS if the agent says 'Let me check that.' (or equivalent) and calls smart_voice_agent intent='find_next_available' with requested_weekday='Tuesday' UNCHANGED, and practitioner/business_id still set from context. FAIL if it calls intent='asap_slots' instead, silently dropping the weekday constraint, or calls universal_router intent='change_time' and ejects the caller from the node."
+    },
+    {
+      "name": "MSG-CALLBACK-1 — CALLBACK REQUEST: reason and name both present in one message",
+      "history": [
+        {"role": "user", "content": "Can I get a callback from someone about booking? It's Sarah, I wanted to ask about pricing before booking."}
+      ],
+      "expected_behavior": "PASS if the agent, since both the reason ('wanted to ask about pricing') and name ('Sarah') are already present, speaks ONE filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='callback_request', payload {\"caller_name\": \"Sarah\", \"callback_reason\": \"...\"} in the SAME response, adding nothing beyond the filler phrase. FAIL if the agent says 'I'll let them know' or 'I'll pass that on' before the tool call, asks for information already given, or splits the filler phrase and tool call across two turns."
+    },
+    {
+      "name": "MSG-RUNNINGLATE-1 — RUNNING LATE: name already known, exact filler phrase required",
+      "history": [
+        {"role": "user", "content": "Hi it's John, I'm running about 10 minutes late for my appointment."}
+      ],
+      "expected_behavior": "PASS if — since the caller's name (John) is already known — the agent says exactly 'I'll let them know you're on your way.' and calls universal_router intent='running_late', payload {\"caller_name\": \"John\"} in the SAME response. FAIL if the agent asks for the name again, substitutes a different acknowledgement phrase, or omits the tool call."
+    },
+    {
+      "name": "MSG-LEAVE-1 — LEAVE MESSAGE: terminal call is abandon_availability (not wrap_up), message spoken verbatim first",
+      "history": [
+        {"role": "user", "content": "Can you leave a message for Dr. Chen? Tell him I need to change my exercises."},
+        {"role": "assistant", "content": "Got it — can I get your name?"},
+        {"role": "user", "content": "It's Marcus."},
+        {"role": "assistant", "content": "One moment."},
+        {"role": "tool", "content": "[universal_router response, intent=leave_message]: {\"message\": \"Thanks Marcus, I've passed that message on to Dr. Chen.\"}"}
+      ],
+      "expected_behavior": "PASS if the agent speaks 'Thanks Marcus, I've passed that message on to Dr. Chen.' verbatim, then calls universal_router intent='abandon_availability' with zero spoken text in the same or next response — per the FRAMEWORK's EXCEPTION, this terminal close-out call needs no filler phrase since it is background bookkeeping, not a new lookup. FAIL if the terminal call uses intent='wrap_up' instead of 'abandon_availability', if the agent claims the message was passed on before this tool result arrived, or if it adds a filler phrase before this specific terminal call."
+    },
+    {
+      "name": "SLOT-FIRST-1 — FIRST APPOINTMENT EXCEPTION: single earliest time only, not a first/last pair",
+      "history": [
+        {"role": "user", "content": "Just the first appointment you have on a Saturday would be great."},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"found\": true, \"response_type\": \"availability\", \"session_id\": \"sess_abc\", \"practitioners\": [{\"practitioner_name\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\", \"dates\": [{\"date\": \"2026-06-20\", \"slot_groups\": {\"morning\": [\"8:00 AM\", \"9:30 AM\", \"11:00 AM\"]}, \"business_id\": \"biz_balmain\", \"business_name\": \"Balmain Osteo\"}]}]}"}
+      ],
+      "expected_behavior": "PASS if the agent applies the FIRST APPOINTMENT EXCEPTION — since the caller explicitly asked for 'the first appointment' on a named day — and offers only the single earliest time: 'The first available Saturday with Emma is at 8:00 AM — does that work?' FAIL if the agent applies the SLOT OFFER HARD RULE instead and offers a pair ('8:00 AM or 11:00 AM')."
+    },
+    {
+      "name": "SLOT-PROX-1 — TIME PROXIMITY EXCEPTION: nearest slot to a stated anchor, not the first/last pair",
+      "history": [
+        {"role": "user", "content": "Something around lunchtime would be ideal."},
+        {"role": "assistant", "content": "Which location suits you — Balmain or Lane Cove?"},
+        {"role": "user", "content": "Balmain"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"found\": true, \"response_type\": \"availability\", \"session_id\": \"sess_abc\", \"practitioners\": [{\"practitioner_name\": \"Emma Walsh\", \"practitioner_id\": \"prac_e\", \"dates\": [{\"date\": \"2026-06-17\", \"slot_groups\": {\"afternoon\": [\"12:30 PM\", \"2:00 PM\", \"4:00 PM\"]}, \"business_id\": \"biz_balmain\", \"business_name\": \"Balmain Osteo\"}]}]}"}
+      ],
+      "expected_behavior": "PASS if the agent resolves 'lunchtime' to a 12:00 PM anchor and applies the TIME PROXIMITY EXCEPTION, offering only the nearest slot: 'I've got 12:30 PM with Emma — does that work?' FAIL if the agent ignores the stated anchor and applies the default SLOT OFFER HARD RULE pair ('12:30 PM or 4:00 PM')."
+    },
+    {
+      "name": "PIVOT-WEEKDAY-1 — CONSTRAINT PIVOT RULE: same-weekday re-search stays in-node, does not exit via change_time",
+      "history": [
+        {"role": "user", "content": "Do you have any Saturdays free?"},
+        {"role": "assistant", "content": "I've got Saturday the 20th at 9:00 AM with Emma — does that work?"},
+        {"role": "user", "content": "Is there anything earlier, like an earlier Saturday?"}
+      ],
+      "expected_behavior": "PASS if the agent treats this as a request for a different instance of the SAME recurring Saturday (requested_weekday already active from the earlier 'any Saturdays' request) — it does NOT call universal_router intent='change_time' and exit the node, and it keeps requested_weekday='Saturday' unchanged when constructing the next search. FAIL if the agent routes this through ESCAPE ROUTE 2 CONSTRAINT CHANGE (intent='change_time'), ejecting the caller from the node for what should be an in-node re-search."
+    },
+    {
+      "name": "RESP-PRIOR1 — PRIOR-UNAVAILABILITY CHECK: same exact declared-empty period repeated, answered from memory",
+      "history": [
+        {"role": "user", "content": "Is there really nothing at all on Friday June 19th?"},
+        {"role": "assistant", "content": "I'm afraid not — I have Monday, Wednesday. Which works for you?"},
+        {"role": "user", "content": "Really nothing on Friday June 19th?"}
+      ],
+      "expected_behavior": "PASS if the agent recognizes the caller is re-asking about the EXACT same period it already declared unavailable this call, and repeats from memory: 'I'm afraid not — I have Monday, Wednesday. Which works for you?' with no new tool call. FAIL if the agent re-calls smart_voice_agent for a period it already explicitly declared empty this call, or would (in a variant of this scenario) treat a bare 'Friday' — a different, undated period — as identical to the specific 'Friday June 19th' already declared empty."
+    },
+    {
+      "name": "RESP-EXHAUST-1 — EXHAUSTED OPTIONS: other cached days offered before abandon_availability",
+      "history": [
+        {"role": "assistant", "content": "I've got 10:00 AM or 2:00 PM with Emma on Wednesday — does either of those work for you?"},
+        {"role": "user", "content": "No, that doesn't work for me."}
+      ],
+      "expected_behavior": "PASS if — assuming stored_practitioners cache also has Thursday and Friday dates with slot data — the agent surfaces those other cached days first: a variation of 'I also have Thursday, Friday — would any of those work for you?' FAIL if the agent immediately routes to universal_router intent='abandon_availability' without first offering the other days still sitting in the cache."
+    },
+    {
+      "name": "RESUME-NODE8-1 — RESUME FROM NODE 8: re-offers cached slots, does not re-fetch",
+      "history": [
+        {"role": "assistant", "content": "I've got 10:00 AM or 1:00 PM with Emma on Wednesday — does either of those work for you?"},
+        {"role": "user", "content": "Actually, what's your cancellation policy?"},
+        {"role": "assistant", "content": "(routed to Node 8 for the info question)"},
+        {"role": "user", "content": "Ok thanks — so what were those times again?"}
+      ],
+      "expected_behavior": "PASS if — since {{info_answered}}='true' and offered_slots (10:00 AM, 1:00 PM) is still set with confirmed_time not yet set — the agent re-offers the pending cached slots: a variation of 'So back to the booking — 10:00 AM or 1:00 PM on Wednesday?' FAIL if the agent calls smart_voice_agent again instead of reusing the already-cached offered_slots."
+    },
+    {
+      "name": "ALLOC-1 — ALLOCATION GATE: practitioner question never asked, even after a day/band change",
+      "history": [
+        {"role": "user", "content": "Wednesday morning would be good."},
+        {"role": "assistant", "content": "I've got 9:00 AM or 11:00 AM on Wednesday morning — does either of those work for you?"},
+        {"role": "user", "content": "Actually, can we try Thursday afternoon instead?"}
+      ],
+      "expected_behavior": "PASS if — assuming new_patient_allocation_enabled='true' — the agent proceeds directly toward STEP 6 (location) or STEP 9 (time offer) for Thursday afternoon WITHOUT ever asking about practitioner preference, on this re-entry to STEP 5 or any prior pass. FAIL if the agent asks 'Do you have a preference for who you'd like to see, or shall I find the next available?' on this re-entry after the day/band change — the ALLOCATION GATE applies on every entry to STEP 5, not just the first."
+    },
+    {
+      "name": "NAO-1 — NEXT AVAILABLE OFFER: different-practitioner response clears band/offered_slots and proceeds to STEP 8",
+      "history": [
+        {"role": "assistant", "content": "How does 10:00 AM with Sarah on Thursday at Balmain sound?"},
+        {"role": "user", "content": "Actually, could I see someone else?"}
+      ],
+      "expected_behavior": "PASS if the agent updates away from Sarah, clears confirmed_band and offered_slots, and proceeds toward STEP 8 (band question) for the still-confirmed Thursday day — per NEXT AVAILABLE OFFER's 'Different practitioner' branch. FAIL if the agent asks about location, re-asks the timeframe question, or re-confirms the day instead of proceeding toward the band step."
+    },
+    {
+      "name": "TR-SUMMARY-1 — response_type=summary: message spoken verbatim, no self-enumeration of dates",
+      "history": [
+        {"role": "user", "content": "What do you have this week?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"found\": true, \"response_type\": \"summary\", \"message\": \"I have availability on Monday, Wednesday, and Friday this week.\"}"}
+      ],
+      "expected_behavior": "PASS if the agent speaks the message field verbatim ('I have availability on Monday, Wednesday, and Friday this week.') and follows with 'Which day works for you?' without separately listing or re-enumerating the dates itself. FAIL if the agent lists dates on its own beyond the message, or omits the 'Which day works for you?' follow-up."
+    },
+    {
+      "name": "TR-FOUNDFALSE-1 — found=false: standard apology, no fabricated availability",
+      "history": [
+        {"role": "user", "content": "Anything available next Tuesday afternoon?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"found\": false}"}
+      ],
+      "expected_behavior": "PASS if the agent says 'I'm sorry, there's no availability for that period. Would you like to try a different time?' FAIL if the agent claims any specific times exist, or skips this apology and asks something else instead."
     }
   ]
 }
