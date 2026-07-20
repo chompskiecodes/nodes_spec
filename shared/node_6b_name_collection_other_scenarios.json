@@ -1,5 +1,5 @@
 {
-  "_comment": "Scenario probes for node 6b (other-booking, Qwen) targeting: Signal 9 execute after email decline, Signal 8 spoken output contract, phone-step confirmation recognition, email decline in third-party booking, and wrong-tool on Signal 9 execute.",
+  "_comment": "Scenario probes for node 6b (other-booking, Qwen) targeting: Signal 9 execute after email decline, Signal 8 spoken output contract, phone-step confirmation recognition, email decline in third-party booking, wrong-tool on Signal 9 execute, Signal 10 (INFO/COVERAGE ENQUIRY) routing vs. Signal 5 (FINANCIAL ENQUIRY) boundary, and RESUMPTION politeness after an aside.",
   "scenarios": [
     {
       "name": "S1 — Signal 9 execute fires: name + phone + email-decline all complete",
@@ -61,6 +61,43 @@
         {"role": "user",      "content": "nope, don't have one"}
       ],
       "expected_behavior": "PASS if agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' with booking_for='other' (Signal 9 fires: name collected, 'that's fine' counted as phone affirmative per step 2 definition, email declined 'nope'). FAIL if agent asks 'Can I confirm which number to use?' — 'that's fine' is a listed affirmative and must be accepted without further confirmation. FAIL if agent asks for email again — 'nope, don't have one' is a clear decline."
+    },
+    {
+      "name": "S6 — Signal 10 (INFO/COVERAGE ENQUIRY) fires on Medicare/private health insurance question, replicating live-call bug",
+      "history": [
+        {"role": "user",      "content": "I need to book for my son."},
+        {"role": "assistant", "content": "What is your son's full name?"},
+        {"role": "user",      "content": "Uh, do you get anything from re-- uh, Medicare or private health insurance?"}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase from the TOOL-CALL FILLER set (e.g. 'One moment.' / 'Just a sec.' / 'Let me check that.') AND calls universal_router intent='info_pivot' with called_number, caller_id in the same turn (Signal 10 fires on the Medicare/private-health-insurance question). FAIL if agent fabricates a coverage answer directly (e.g. 'We don't process Medicare or private health insurance claims directly...') — this is the exact live-call bug being fixed. FAIL if agent calls smart_voice_agent instead of universal_router. FAIL if agent calls universal_router silently with no filler phrase (Signal 10 is filler-only, not silent — ESCAPE ROUTE HARD RULE does not apply here). FAIL if agent asks 'What is your son's full name?' again without addressing the coverage question at all."
+    },
+    {
+      "name": "S7 — Boundary: payment-plan question still fires Signal 5 (FINANCIAL ENQUIRY), not Signal 10",
+      "history": [
+        {"role": "user",      "content": "Booking for my daughter."},
+        {"role": "assistant", "content": "What is your daughter's full name?"},
+        {"role": "user",      "content": "Can we set up a payment plan for this?"}
+      ],
+      "expected_behavior": "PASS if agent speaks 'Our team handles billing directly — would you like me to get someone to call you back?' (Signal 5 fires — 'payment plan' is a FINANCIAL ENQUIRY trigger, not a coverage/rebate question, so Signal 5's SCOPED EXCEPTION does not apply). FAIL if agent routes via universal_router intent='info_pivot' (Signal 10 incorrectly swallowed a plain billing question — scope creep past the SCOPED EXCEPTION's coverage-only carve-out). FAIL if agent fabricates a payment-plan policy answer directly."
+    },
+    {
+      "name": "S8 — RESUMPTION after aside: no 'Now,' refocusing prefix (reproduces reported politeness bug)",
+      "history": [
+        {"role": "user",      "content": "I need to book for my son."},
+        {"role": "assistant", "content": "What is your son's full name?"},
+        {"role": "user",      "content": "What's the cost fees?"},
+        {"role": "tool",      "content": "[smart_voice_agent response]: {\"success\": true, \"price\": \"$160\", \"service\": \"Initial Hand Therapy Consultation\"}"}
+      ],
+      "expected_behavior": "PASS if agent's response states the price AND re-asks the pending name question in its original exact wording with no refocusing lead-in, e.g. 'The cost for the Initial Hand Therapy Consultation is one hundred and sixty dollars. What is your son's full name?'. FAIL if the resumption is prefixed with 'Now,' (e.g. 'Now, what is your son's full name?') or any similar refocusing lead-in such as 'So,' — this is the exact politeness bug reported from the live call. FAIL if the agent omits the pending name question entirely after answering the price."
+    },
+    {
+      "name": "S9 — APPOINTMENT CONFIRMATION + Signal 10 same-turn: confirmation phrase satisfies filler requirement, no double speech (replicates live-call transcript verbatim)",
+      "history": [
+        {"role": "assistant", "content": "Great, let's lock in Monday the 20th at 4 PM with Ravi."},
+        {"role": "user",      "content": "Uh, do you get anything from re-- uh, Medicare or private health insurance?"}
+      ],
+      "dvs": {"appointment_time": "16:00", "appointment_date": "2026-07-20", "business_name": "Browns Plains"},
+      "expected_behavior": "PASS if agent speaks ONLY the confirmation phrase, e.g. 'Perfect, 4 PM Monday the 20th with Ravi at Browns Plains.', with no separate filler phrase added, then calls universal_router intent='info_pivot' (Signal 10 fires on the same first turn as APPOINTMENT CONFIRMATION; the SCOPED EXCEPTION means the confirmation phrase itself satisfies the pre-tool-call speech requirement — do not add a filler like 'One moment.' on top). FAIL if the agent fabricates a Medicare/private-health-insurance coverage answer directly instead of calling universal_router intent='info_pivot' — this is the exact live-call bug being fixed, now probed at the first-turn edge case. FAIL if the agent speaks the confirmation phrase AND a separate filler phrase (double-speaking). FAIL if the confirmation phrase is dropped or altered."
     }
   ]
 }

@@ -89,8 +89,13 @@ OUTPUT templates are authoritative. The LLM only includes variables explicitly l
 | BOOKING INTENT | `patient_name_raw`, `booking_for`, `family_member_name`, `practitioner_preference`, `timeframe_raw`, `preferred_gender`, `location`, `patient_status`, `implied_service`, `caller_complaint`, `group_or_private` |
 | CANCEL/RESCHEDULE | `patient_name_raw`, `reschedule_mode`, `booking_for`, `family_member_name`, `timeframe_raw`, `location` |
 | SYMPTOM/CONDITION | `caller_complaint`, `patient_name_raw`, `booking_for`, `family_member_name`, `timeframe_raw`, `preferred_gender`, `location`, `patient_status` |
+| COMPLAINT INTAKE (Ryde only) | Same as SYMPTOM + `caller_complaint` as primary field |
+| INFO PIVOT / WRAP-UP | Silent routing — no context merge needed |
 
-**`{{double_braces}}` required:** every node that needs a variable must reference it with `{{double_braces}}` in the prompt or ElevenLabs won't inject it.
+**`{{double_braces}}` required:** every node that needs a variable must reference it with `{{double_braces}}` in the prompt or ElevenLabs won't inject it. Examples:
+- Node 2: `CALLER CONTEXT: caller_name = {{patient_name_raw}}`
+- Node 3: `caller_name = {{patient_name_raw}}` in ROUTING CONSTANTS
+- Node 6a: use `{{patient_name_raw}}` not `[patient_name_raw]` (square brackets = instruction text, not injection)
 
 ---
 

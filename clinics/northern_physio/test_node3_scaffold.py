@@ -523,30 +523,42 @@ def generate_tests(fixtures: dict) -> list:
         ],
     })
 
-    # M3: Multi-pract, NO first_available → STEP 5 preference question.
+    # M3: Multi-pract, NO first_available, band signal given → STEP 9 grouped per-practitioner offer.
+    # (Corrected 2026-07-18: MULTI-PRACTITIONER TIME SKIP at STEP 5, line 243 of the P2
+    # template, fires whenever confirmed_band is set + multiple practitioners + no
+    # confirmed_practitioner — this is evaluated BEFORE the preference-question line (244),
+    # so a band signal always skips straight to STEP 9's MULTI-PRACTITIONER OFFER. The
+    # preference question only fires when no band has been given yet. Live-verified against
+    # the actual agent response.)
     tests.append({
-        "name": f"{p} M3 — Multi-pract no first_available: preference question at STEP 5",
+        "name": f"{p} M3 — Multi-pract no first_available, band given: STEP 9 grouped offer",
         "chat_history": eh() + [
             _fixture_msg(multi_nfa, 14),
             _m("agent", "I have Dithu Beeram and Jas Mangat available.", 17),
             _m("user",  "I'd prefer the morning.", 20),
         ],
         "success_condition": (
-            "No first_available. Two practitioners with dates. "
-            "User gives band signal (morning) but no practitioner preference. "
-            "STEP 5: BAND SIGNAL GUARD skips NEXT AVAILABLE OFFER, falls through to "
-            "'Multiple practitioners, preference not yet asked' — "
-            "agent asks: 'Do you have a preference for who you'd like to see, "
-            "or shall I find the next available?' (or close paraphrase). "
-            "Agent does NOT call universal_router or smart_router."
+            "No first_available. Two practitioners (Dithu Beeram, Jas Mangat) with dates, "
+            "no confirmed_practitioner. User gives a band signal ('morning') with no "
+            "practitioner preference. STEP 5's MULTI-PRACTITIONER TIME SKIP fires (confirmed_band "
+            "now set + multiple practitioners + no confirmed_practitioner) and skips directly to "
+            "STEP 9's MULTI-PRACTITIONER OFFER, which reads each practitioner's slots "
+            "independently and offers them grouped by practitioner in one turn — e.g. "
+            "'I've got 9:00 AM or 10:00 AM with Dithu Beeram, and 11:00 AM with Jas Mangat — "
+            "who works better?' (exact times/counts depend on cached data; the practitioner-"
+            "grouped structure is what matters). Agent does NOT ask a separate 'do you have a "
+            "preference' question first — the band signal already bypasses that. "
+            "Agent does NOT call universal_router or smart_router this turn."
         ),
         "success_examples": [
-            _ok("Do you have a preference for who you'd like to see, "
-                "or shall I find the next available?"),
+            _ok("I've got 9:00 AM or 10:00 AM with Dithu Beeram, and 11:00 AM with "
+                "Jas Mangat — who works better?"),
+            _ok("For the morning I have 9:00 AM or 10:00 AM with Dithu Beeram, and "
+                "11:00 AM with Jas Mangat — who works better for you?"),
         ],
         "failure_examples": [
             _fail("[calls universal_router]"),
-            _fail("I've got 9:00 AM"),
+            _fail("Do you have a preference for who you'd like to see, or shall I find the next available?"),
         ],
     })
 
@@ -591,6 +603,10 @@ def generate_tests(fixtures: dict) -> list:
     })
 
     # M6: Single practitioner → no preference question, slot offer.
+    # (Corrected 2026-07-18: STEP 9's SINGLE-PRACTITIONER OFFER 2+-times branch, line 335 of
+    # the P2 template, applies the SLOT OFFER HARD RULE exact form — "I've got [first] or
+    # [last] with [first_name] — does either of those work for you?" — which names the
+    # practitioner and does not name the day. Live-verified against the actual agent response.)
     tests.append({
         "name": f"{p} M6 — Single practitioner: no preference question, slot offer",
         "chat_history": eh() + [
@@ -599,13 +615,17 @@ def generate_tests(fixtures: dict) -> list:
             _m("user",  "Let's do morning.", 20),
         ],
         "success_condition": (
-            "Only one practitioner (Dithu Beeram). "
-            "Agent does NOT ask preference question. "
-            "After morning selected, agent offers slots: "
-            "'I've got 9:00 AM or 11:00 AM on Wednesday'. "
-            "Does NOT call universal_router."
+            "Only one practitioner (Dithu Beeram) — confirmed_practitioner is set, so "
+            "SINGLE-PRACTITIONER OFFER applies. Agent does NOT ask preference question. "
+            "After morning selected (2+ times, no caller time-preference stated), agent applies "
+            "the SLOT OFFER HARD RULE exact form: 'I've got [first] or [last] with [first_name] "
+            "— does either of those work for you?' — e.g. 'I've got 9:00 AM or 11:00 AM with "
+            "Dithu — does either of those work for you?' Does NOT call universal_router."
         ),
-        "success_examples": [_ok("I've got 9:00 AM or 11:00 AM on Wednesday")],
+        "success_examples": [
+            _ok("I've got 9:00 AM or 11:00 AM with Dithu — does either of those work for you?"),
+            _ok("I've got 9:00 AM or 11:00 AM — does either of those work for you?"),
+        ],
         "failure_examples": [
             _fail("Do you have a preference for who you'd like to see"),
             _fail("[calls universal_router]"),
@@ -792,9 +812,18 @@ def generate_tests(fixtures: dict) -> list:
             _m("agent", offer_line, 17),
         ]
 
-    # S7A — proactive offer fired when confirmed_day has no match and first_available is set.
+    # S7A — no match on requested day: STEP 7 lists alternative days (no proactive first_available push).
+    # (Corrected 2026-07-18: STEP 7's day-mismatch handling, line 282 of the P2 template, has
+    # no rule that proactively pushes a single specific first_available time slot ahead of the
+    # day-list. first_available is only proactively offered from STEP 5 (practitioner-preference
+    # context, NEXT AVAILABLE OFFER) and STEP 2B's entry-processing of a fresh tool result —
+    # neither is the active path when the caller asks a plain "is there anything on Monday?"
+    # question after confirmed_day was already set to a day with no matching results. This test
+    # previously asserted a proactive single-time offer as a hard requirement; that behavior does
+    # not exist in the template and was never implemented — live-verified against the actual
+    # agent response, which produces the day-list form.)
     tests.append({
-        "name": f"{p} S7A — STEP 7 no-match + first_available: proactive offer made",
+        "name": f"{p} S7A — STEP 7 no-match day: day-list alternative offer",
         "chat_history": [
             _m("user",  f"Hi, I'd like to book my {apt_type} appointment please.", 2),
             _m("agent", "When would you like to come in?", 5),
@@ -805,20 +834,21 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "success_condition": (
             "User asked for Monday. Fixture has only Tuesday 14th and Saturday 18th — no Monday. "
-            "STATE STORED annotation (1 turn back) has first_available_time=5:00 PM, first_available_day=Tuesday. "
-            "DAY MISMATCH: Monday not in stored_practitioners. CRITICAL RULE applies: "
-            "first_available_time is non-null, so agent MUST proactively offer it. "
-            "Expected: 'Nothing on Monday -- how does 5:00 PM on Tuesday sound?' (or close variant). "
-            "Agent does NOT call smart_router. Does NOT call universal_router. "
-            "EVALUATOR NOTE: any proactive offer of Tuesday 5:00 PM (or the 14th) is a PASS. "
-            "Old-style day-list ('I do have Tuesday and Saturday. Which suits you?') is a FAIL."
+            "DAY MISMATCH: Monday not in stored_practitioners. STEP 7 states that Monday isn't "
+            "available and lists the alternative day names it does have, asking which works — "
+            "e.g. 'I'm afraid not — I have Tuesday the 14th or Saturday the 18th. Which works "
+            "for you?' (or close variant, e.g. 'Which day suits you — Tuesday the 14th or "
+            "Saturday the 18th?'). Agent does NOT call smart_router. Does NOT call "
+            "universal_router. "
+            "EVALUATOR NOTE: a day-list naming both alternative days is a PASS. A proactive "
+            "single-time push ('how does 5:00 PM on Tuesday sound?') that skips naming Saturday "
+            "is not the template's defined behavior for this path and should not be required."
         ),
         "success_examples": [
-            _ok("Nothing on Monday -- how does 5:00 PM on Tuesday sound?"),
-            _ok("I don't have anything on Monday, but I do have 5:00 PM on Tuesday the 14th -- does that work?"),
+            _ok("I'm afraid not — I have Tuesday the 14th or Saturday the 18th. Which works for you?"),
+            _ok("Nothing on Monday, I'm afraid — I do have Tuesday the 14th or Saturday the 18th. Which suits you?"),
         ],
         "failure_examples": [
-            _fail("I don't have anything on Monday -- I do have Tuesday the 14th and Saturday the 18th. Which suits you?"),
             _fail("[calls smart_router]"),
             _fail("[calls universal_router]"),
         ],

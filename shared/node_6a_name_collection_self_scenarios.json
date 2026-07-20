@@ -1,5 +1,5 @@
 {
-  "_comment": "Scenario probes for node 6a (self-booking, Qwen) targeting: execute-signal silence, ESCAPE ROUTE bleed on spoken signals, email-decline recognition, known-caller Signal 4 fast-path, and wrong-tool on execute after prior universal_router calls.",
+  "_comment": "Scenario probes for node 6a (self-booking, Qwen) targeting: execute-signal silence, ESCAPE ROUTE bleed on spoken signals, email-decline recognition, known-caller Signal 4 fast-path, wrong-tool on execute after prior universal_router calls, Signal 11 (INFO/COVERAGE ENQUIRY) routing vs. Signal 5 (FINANCIAL ENQUIRY) boundary, and RESUMPTION politeness after an aside.",
   "scenarios": [
     {
       "name": "S1 — Execute signal (Signal 8) produces speech and smart_voice_agent after email decline",
@@ -75,6 +75,51 @@
         {"role": "user",      "content": "Thank you."}
       ],
       "expected_behavior": "PASS if agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' (Signal 4 fires because caller_first_name, caller_last_name, and caller_email DVs are all non-empty — DV-BASED TRIGGER means 'Thank you' does NOT suppress the signal). FAIL if agent says 'You're welcome!' or any wrap-up phrase without calling smart_voice_agent (social phrase incorrectly treated as conversation ender). FAIL if agent asks 'What's your full name for the booking?' (re-collected name despite DVs populated). FAIL if smart_voice_agent is called silently without spoken output."
+    },
+    {
+      "name": "S7 — Signal 11 (INFO/COVERAGE ENQUIRY) fires on NDIS coverage question mid self-booking name collection",
+      "history": [
+        {"role": "user",      "content": "I'd like to book an appointment."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "Actually wait, is this covered under NDIS?"}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase from the TOOL-CALL FILLER set AND calls universal_router intent='info_pivot' with called_number, caller_id in the same turn (Signal 11 fires on the NDIS coverage question). FAIL if agent fabricates an NDIS coverage answer directly. FAIL if agent calls smart_voice_agent instead of universal_router. FAIL if agent calls universal_router silently with no filler phrase (Signal 11 is filler-only, not silent — ESCAPE ROUTE HARD RULE does not apply here). FAIL if agent asks 'What's your full name for the booking?' again without addressing the coverage question at all."
+    },
+    {
+      "name": "S8 — Boundary: refund question still fires Signal 5 (FINANCIAL ENQUIRY), not Signal 11",
+      "history": [
+        {"role": "user",      "content": "Hi, I want to book in."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "Before that — can I get a refund for my last visit?"}
+      ],
+      "expected_behavior": "PASS if agent speaks 'Our team handles billing directly — would you like me to get someone to call you back?' (Signal 5 fires — refunds are a FINANCIAL ENQUIRY trigger, not a coverage/rebate question, so Signal 5's SCOPED EXCEPTION does not apply). FAIL if agent routes via universal_router intent='info_pivot' (Signal 11 incorrectly swallowed a refund question — scope creep past the SCOPED EXCEPTION's coverage-only carve-out). FAIL if agent fabricates a refund policy answer directly."
+    },
+    {
+      "name": "S9 — RESUMPTION after aside: no 'Now,' refocusing prefix (reproduces reported politeness bug)",
+      "history": [
+        {"role": "user",      "content": "Hi, I'd like to book an appointment."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "What's the cost fees?"},
+        {"role": "tool",      "content": "[smart_voice_agent response]: {\"success\": true, \"price\": \"$160\", \"service\": \"Initial Consultation\"}"}
+      ],
+      "expected_behavior": "PASS if agent's response states the price AND re-asks the pending name question in its original exact wording with no refocusing lead-in, e.g. 'The cost for the Initial Consultation is one hundred and sixty dollars. What's your full name for the booking?'. FAIL if the resumption is prefixed with 'Now,' (e.g. 'Now, what's your full name for the booking?') or any similar refocusing lead-in such as 'So,' — this is the exact politeness bug reported from the live call. FAIL if the agent omits the pending name question entirely after answering the price."
+    },
+    {
+      "name": "S10 — APPOINTMENT CONFIRMATION + Signal 11 same-turn: confirmation phrase satisfies filler requirement, no double speech",
+      "history": [
+        {"role": "assistant", "content": "Great, let's lock in Thursday the 23rd at 2 PM with Priya."},
+        {"role": "user",      "content": "Does Medicare cover this appointment?"}
+      ],
+      "dvs": {"appointment_time": "14:00", "appointment_date": "2026-07-23", "business_name": "Riverside Clinic"},
+      "expected_behavior": "PASS if agent speaks ONLY the confirmation phrase, e.g. 'Perfect, 2 PM Thursday the 23rd with Priya at Riverside Clinic.', with no separate filler phrase added, then calls universal_router intent='info_pivot' (Signal 11 fires on the same first turn as APPOINTMENT CONFIRMATION; the SCOPED EXCEPTION means the confirmation phrase itself satisfies the pre-tool-call speech requirement — do not add a filler like 'One moment.' on top). FAIL if the agent speaks the confirmation phrase AND a separate filler phrase (double-speaking). FAIL if the agent fabricates a Medicare coverage answer instead of calling universal_router intent='info_pivot'. FAIL if the confirmation phrase is dropped or altered."
+    },
+    {
+      "name": "S11 — patient_name_raw already known skips name re-ask, asks email instead (reproduces Balrothery live bug 2026-07-20)",
+      "history": [
+        {"role": "user", "content": "Hi, this is Tanya Marshall calling to book in with Sean."}
+      ],
+      "dvs": {"appointment_time": "17:00", "appointment_date": "2026-07-23", "business_name": "Balbriggan", "patient_name_raw": "Tanya Marshall", "caller_first_name": "", "caller_last_name": "", "caller_email": ""},
+      "expected_behavior": "PASS if agent speaks the confirmation phrase (e.g. 'Perfect, 5 PM Thursday the 23rd with Sean at Balbriggan.') immediately followed in the SAME turn by 'Do you have an email address for the booking?' — patient_name_raw='Tanya Marshall' contains two tokens, so NAME RESOLUTION CHECK branch (b) already resolves the full name and the name step must NOT be re-asked. FAIL if the agent asks 'What's your full name for the booking?' or 'I just need your last name' (ignored patient_name_raw and reproduced the live bug where a caller was asked for a name she'd already given, said thanks/bye instead of answering, and the booking never executed). FAIL if the agent speaks the confirmation phrase with no follow-up question at all (dropped OUTPUT CONTRACT)."
     }
   ]
 }
