@@ -3,6 +3,7 @@
   "scenarios": [
     {
       "name": "S1 — Signal 9 execute fires: name + phone + email-decline all complete",
+      "tags": ["core"],
       "history": [
         {"role": "user",      "content": "I need to book for my son."},
         {"role": "assistant", "content": "What is their full name?"},
@@ -98,6 +99,49 @@
       ],
       "dvs": {"appointment_time": "16:00", "appointment_date": "2026-07-20", "business_name": "Browns Plains"},
       "expected_behavior": "PASS if agent speaks ONLY the confirmation phrase, e.g. 'Perfect, 4 PM Monday the 20th with Ravi at Browns Plains.', with no separate filler phrase added, then calls universal_router intent='info_pivot' (Signal 10 fires on the same first turn as APPOINTMENT CONFIRMATION; the SCOPED EXCEPTION means the confirmation phrase itself satisfies the pre-tool-call speech requirement — do not add a filler like 'One moment.' on top). FAIL if the agent fabricates a Medicare/private-health-insurance coverage answer directly instead of calling universal_router intent='info_pivot' — this is the exact live-call bug being fixed, now probed at the first-turn edge case. FAIL if the agent speaks the confirmation phrase AND a separate filler phrase (double-speaking). FAIL if the confirmation phrase is dropped or altered."
+    },
+    {
+      "name": "S10 — Signal 11 (GENERAL/FACILITY ENQUIRY) fires on parking question mid other-booking name collection (reproduces Bob Ward Physiotherapy live-call hallucination 2026-07-20)",
+      "history": [
+        {"role": "user",      "content": "I need to book for my son."},
+        {"role": "assistant", "content": "What is your son's full name?"},
+        {"role": "user",      "content": "Right. Where can I park?"}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase from the TOOL-CALL FILLER set AND calls universal_router intent='info_pivot' with called_number, caller_id in the same turn (Signal 11 fires on the parking question — the node has no explicit parking information and must never answer from its own knowledge). FAIL if the agent fabricates any specific parking answer (e.g. describing free street parking or a rear car park) instead of routing to info_pivot — this exact fabrication happened on a live call at Bob Ward Physiotherapy. FAIL if agent calls smart_voice_agent instead of universal_router. FAIL if agent calls universal_router silently with no filler phrase (Signal 11 is filler-only, not silent — ESCAPE ROUTE HARD RULE does not apply here). FAIL if agent asks 'What is your son's full name?' again without addressing the parking question at all."
+    },
+    {
+      "name": "EC1 — Jukes/Dukes phonetic mismatch for third-party patient: silent-correct spelling from email, no clarifying question",
+      "tags": ["email-name-crosscheck"],
+      "history": [
+        {"role": "user",      "content": "I need to book for my son, his name's Anthony Dukes."},
+        {"role": "assistant", "content": "I'll put your number on Anthony's record — is that right, or does he have his own?"},
+        {"role": "tool",      "content": "[universal_router response]: {\"intent\": \"capture_context\", \"success\": true, \"patient_name_raw\": \"Anthony Dukes\"}"},
+        {"role": "user",      "content": "Yes, use mine."},
+        {"role": "assistant", "content": "What's their email address?"},
+        {"role": "user",      "content": "It's a, n, t, h, o, n, y, dot, j, u, k, e, s, at gmail dot com."}
+      ],
+      "expected_behavior": "PASS if agent silently corrects the stored surname to 'Jukes' (matching the email local-part spelling) and proceeds directly to the email confirmation question, e.g. 'So that's anthony.jukes at gmail dot com — is that right?', with NO separate question raised about the Dukes/Jukes spelling discrepancy. FAIL if the agent asks a clarifying question like 'Is his last name spelled with a J or a D?' (the node's spelling-check confidence must be LOWERED for this exact class of phonetic mismatch, per the fix under test — a J/D confusion at the start of a same-sounding surname is resolved silently in favour of the email spelling, not re-confirmed with the caller). FAIL if the agent keeps 'Dukes' and never reconciles the mismatch at all."
+    },
+    {
+      "name": "EC2 — Significant (3+ char) name/email mismatch for third-party patient still triggers the clarifying question, not silent-correction",
+      "tags": ["email-name-crosscheck"],
+      "history": [
+        {"role": "user",      "content": "Booking for my daughter, Rebecca Sinclair."},
+        {"role": "assistant", "content": "I'll put your number on Rebecca's record — is that right, or does she have her own?"},
+        {"role": "tool",      "content": "[universal_router response]: {\"intent\": \"capture_context\", \"success\": true, \"patient_name_raw\": \"Rebecca Sinclair\"}"},
+        {"role": "user",      "content": "Yes, use mine."},
+        {"role": "assistant", "content": "What's their email address?"},
+        {"role": "user",      "content": "It's r, dot, montgomery, at outlook dot com."}
+      ],
+      "expected_behavior": "PASS if the agent asks a clarifying question noting the surname in the email ('Montgomery') doesn't match the surname given ('Sinclair') — e.g. 'I have the email as r.montgomery — does that match Rebecca Sinclair, or should the booking be under Montgomery?' — because this is a substantial multi-character mismatch, not a same-sounding phonetic pair. FAIL if the agent silently overwrites 'Sinclair' with 'Montgomery' (or vice versa) without asking — the EMAIL NAME CROSS-CHECK's lowered confidence threshold applies ONLY to same-sounding spelling variants (per EC1), not to a genuinely different surname appearing in the email. FAIL if the agent ignores the mismatch entirely and proceeds straight to execute."
+    },
+    {
+      "name": "AG1 — AMBIGUITY GATE fires on newly-broadened sound-alike pair (Cain/Kane) for third-party patient",
+      "tags": ["email-name-crosscheck"],
+      "history": [
+        {"role": "user",      "content": "I'd like to book for my husband, his last name's Cain."}
+      ],
+      "expected_behavior": "PASS if the agent asks a spelling-confirmation question distinguishing the two spellings, e.g. 'Is that C-A-I-N or K-A-N-E?' (Cain/Kane is one of the sound-alike pairs the broadened AMBIGUITY GATE now explicitly lists). FAIL if the agent assumes one spelling (e.g. silently stores 'Cain' or 'Kane') without confirming which — the AMBIGUITY GATE's broadened trigger list requires this pair to raise the spelling question, not skip straight to the phone-record question. FAIL if the agent asks for the full name again instead of a targeted spelling question."
     }
   ]
 }
