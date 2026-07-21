@@ -3,6 +3,7 @@
   "scenarios": [
     {
       "name": "S1 — Execute signal (Signal 8) produces speech and smart_voice_agent after email decline",
+      "tags": ["core"],
       "history": [
         {"role": "user",      "content": "Hi, I'd like to book an appointment."},
         {"role": "assistant", "content": "What's your full name for the booking?"},
@@ -120,6 +121,75 @@
       ],
       "dvs": {"appointment_time": "17:00", "appointment_date": "2026-07-23", "business_name": "Balbriggan", "patient_name_raw": "Tanya Marshall", "caller_first_name": "", "caller_last_name": "", "caller_email": ""},
       "expected_behavior": "PASS if agent speaks the confirmation phrase (e.g. 'Perfect, 5 PM Thursday the 23rd with Sean at Balbriggan.') immediately followed in the SAME turn by 'Do you have an email address for the booking?' — patient_name_raw='Tanya Marshall' contains two tokens, so NAME RESOLUTION CHECK branch (b) already resolves the full name and the name step must NOT be re-asked. FAIL if the agent asks 'What's your full name for the booking?' or 'I just need your last name' (ignored patient_name_raw and reproduced the live bug where a caller was asked for a name she'd already given, said thanks/bye instead of answering, and the booking never executed). FAIL if the agent speaks the confirmation phrase with no follow-up question at all (dropped OUTPUT CONTRACT)."
+    },
+    {
+      "name": "S12 — Signal 12 (GENERAL/FACILITY ENQUIRY) fires on parking question mid self-booking name collection (reproduces Bob Ward Physiotherapy live-call hallucination 2026-07-20)",
+      "history": [
+        {"role": "user",      "content": "I'd like to book an appointment."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "Right. Where can I park?"}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase from the TOOL-CALL FILLER set AND calls universal_router intent='info_pivot' with called_number, caller_id in the same turn (Signal 12 fires on the parking question — the node has no explicit parking information and must never answer from its own knowledge). FAIL if the agent fabricates any specific parking answer (e.g. describing free street parking or a rear car park) instead of routing to info_pivot — this exact fabrication happened on a live call at Bob Ward Physiotherapy. FAIL if agent calls smart_voice_agent instead of universal_router. FAIL if agent calls universal_router silently with no filler phrase (Signal 12 is filler-only, not silent — ESCAPE ROUTE HARD RULE does not apply here). FAIL if agent asks 'What's your full name for the booking?' again without addressing the parking question at all."
+    },
+    {
+      "name": "EC1 — Jukes/Dukes phonetic mismatch: silent-correct spelling from email, no clarifying question (reproduces Speeding Health live call)",
+      "tags": ["email-name-crosscheck"],
+      "history": [
+        {"role": "user",      "content": "Hi, I'd like to book an appointment. My name's Anthony Dukes."},
+        {"role": "assistant", "content": "So that's Anthony Dukes — is that right?"},
+        {"role": "user",      "content": "Yes, that's right."},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "It's a, n, t, h, o, n, y, dot, j, u, k, e, s, at gmail dot com."}
+      ],
+      "expected_behavior": "PASS if agent silently corrects the stored surname to 'Jukes' (matching the email local-part spelling) and proceeds directly to the email confirmation question, e.g. 'So that's anthony.jukes at gmail dot com — is that right?', with NO separate question raised about the Dukes/Jukes spelling discrepancy. FAIL if the agent asks a clarifying question like 'Is your last name spelled with a J or a D?' (the node's spelling-check confidence must be LOWERED for this exact class of phonetic mismatch, per the fix under test — a J/D confusion at the start of a same-sounding surname is resolved silently in favour of the email spelling, not re-confirmed with the caller). FAIL if the agent keeps 'Dukes' and never reconciles the mismatch at all."
+    },
+    {
+      "name": "EC2 — Significant (3+ char) name/email mismatch still triggers the clarifying question, not silent-correction",
+      "tags": ["email-name-crosscheck"],
+      "history": [
+        {"role": "user",      "content": "Hi, I'd like to book an appointment. My name's Rebecca Sinclair."},
+        {"role": "assistant", "content": "So that's Rebecca Sinclair — is that right?"},
+        {"role": "user",      "content": "Yes."},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "It's r, dot, montgomery, at outlook dot com."}
+      ],
+      "expected_behavior": "PASS if the agent asks a clarifying question noting the surname in the email ('Montgomery') doesn't match the surname given ('Sinclair') — e.g. 'I have your email as r.montgomery — does that match the name Sinclair, or should the booking be under Montgomery?' — because this is a substantial multi-character mismatch, not a same-sounding phonetic pair. FAIL if the agent silently overwrites 'Sinclair' with 'Montgomery' (or vice versa) without asking — the EMAIL NAME CROSS-CHECK's lowered confidence threshold applies ONLY to same-sounding spelling variants (per EC1), not to a genuinely different surname appearing in the email. FAIL if the agent ignores the mismatch entirely and proceeds straight to execute."
+    },
+    {
+      "name": "AG1 — AMBIGUITY GATE fires on newly-broadened sound-alike pair (Cain/Kane)",
+      "tags": ["email-name-crosscheck"],
+      "history": [
+        {"role": "user",      "content": "Hi, I'd like to book in please. My last name's Cain."}
+      ],
+      "expected_behavior": "PASS if the agent asks a spelling-confirmation question distinguishing the two spellings, e.g. 'Is that C-A-I-N or K-A-N-E?' (Cain/Kane is one of the sound-alike pairs the broadened AMBIGUITY GATE now explicitly lists). FAIL if the agent assumes one spelling (e.g. silently stores 'Cain' or 'Kane') without confirming which — the AMBIGUITY GATE's broadened trigger list requires this pair to raise the spelling question, not skip straight to email collection. FAIL if the agent asks for the full name again instead of a targeted spelling question."
+    },
+    {
+      "name": "EP1 — Affirmative 'yeah' to email question triggers 'What is it?' not silence",
+      "tags": ["email-patience"],
+      "history": [
+        {"role": "user",      "content": "Hi, I'd like to book an appointment."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "John Smith"},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "Yeah."}
+      ],
+      "expected_behavior": "PASS if agent asks for the actual email address, e.g. 'What is it?' (since 'Yeah' is an affirmative meaning the caller has an email but hasn't provided it yet). FAIL if agent goes silent, says something unrelated, or immediately calls smart_voice_agent (email step is not complete — the caller confirmed having an email but hasn't provided it). FAIL if agent repeats 'Do you have an email address?' (that was already answered). FAIL if agent calls any tool this turn."
+    },
+    {
+      "name": "EP2 — Email solicitation patience gate: 2 confused responses triggers skip offer",
+      "tags": ["email-patience"],
+      "history": [
+        {"role": "user",      "content": "Hi, I need to book please."},
+        {"role": "assistant", "content": "What's your full name for the booking?"},
+        {"role": "user",      "content": "John Miller"},
+        {"role": "assistant", "content": "Do you have an email address for the booking?"},
+        {"role": "user",      "content": "Yeah."},
+        {"role": "assistant", "content": "What is it?"},
+        {"role": "user",      "content": "What's that?"},
+        {"role": "assistant", "content": "What email address would you like to use for the booking?"},
+        {"role": "user",      "content": "What's that?"}
+      ],
+      "expected_behavior": "PASS if agent offers to skip the email after 2 confused responses, e.g. 'No problem if you don't have one — shall I skip the email for now?' FAIL if agent asks for the email address a third time without offering the skip. FAIL if agent calls smart_voice_agent (email step is not complete — the skip offer must be accepted first). FAIL if agent interprets 'What's that?' as a decline and calls smart_voice_agent without offering the skip."
     }
   ]
 }
