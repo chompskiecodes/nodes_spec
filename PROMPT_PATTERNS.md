@@ -135,6 +135,26 @@ TURN N+2 (route):
 - The tier gate question uses "seeing" (returning patient context) vs "looking to see" (new patient context).
 - Root cause (beyondphysiofitness, 2026-06-15): both Private and ACC return paths were written without this gate.
 
+### CONFIRM_SERVICE FILLER OVERRIDE — system prompt conflict
+**Bug (Palm Beach audit, 2026-07-21):** System prompt TOOL-CALL FILLER mandates one filler phrase before every tool call. CONFIRM_SERVICE SILENT RULE says zero spoken output. Under call pressure Haiku defaults to the system prompt's general rule and adds filler before confirm_service — protocol violation.  
+**Fix:** CONFIRM_SERVICE SILENT RULE must include an explicit OVERRIDE clause suspending the system prompt filler rule:
+```
+CONFIRM_SERVICE SILENT RULE: Any turn that calls universal_router with intent="confirm_service" is a tool-call-only turn. Apply OUTPUT VALIDATION: strip ALL planned spoken text from this turn before sending. HALT immediately after the tool call. Zero spoken output means zero — no preamble, no acknowledgement, no filler. OVERRIDE: this rule OVERRIDES the system prompt TOOL-CALL FILLER for confirm_service calls. The system prompt filler rule is suspended when intent="confirm_service" — no filler phrase is added, not even "One moment." This is the highest-priority rule for this turn type.
+```
+**Required position:** In `## MINI-FRAMEWORK`, immediately before or after the CONFIRM_SERVICE CALL FORMAT block. Not in an escape route — in the framework rules evaluated every turn.
+
+### PRACTITIONER-ONLY PATH — explicit two-step SEQUENCE required
+**Bug (Palm Beach audit, 2026-07-21):** "Use PRAC_VARIANT template instead of standard VARIANT where the branch asks a variant question" is ambiguous. Haiku can interpret PRAC_VARIANT as replacing the service selection question rather than the gate question inside the branch, reversing the intended order.  
+**Fix:** Replace any "use PRAC_VARIANT where branch asks variant question" phrasing with an explicit two-step SEQUENCE:
+```
+SEQUENCE — two explicit steps, in order:
+STEP 1 (service question first): Store practitioner_preference = [matched name]. Ask which service:
+  Ask (SELF) "We offer [MENU_LIST]. Which were you after with [first_name]?" (OTHER) "Which of those were they after?" HALT. Spoken turn only — zero tool calls. Wait for caller to name a service.
+STEP 2 (once service is known from caller's answer): Enter that category's branch normally. At the branch gate question (new/existing check), replace VARIANT_SELF with PRAC_VARIANT_SELF and VARIANT_OTHER with PRAC_VARIANT_OTHER. All other branch logic (sub-type detection, TURN 1/2 GUARD, routing) follows as normal. Carry practitioner_preference in the confirm_service payload (except for room-resource services — see below).
+PRAC_VARIANT replaces VARIANT at the gate question step only — it does NOT replace the service question (STEP 1). PRAC_VARIANT is never asked before the caller has named a service.
+```
+**Key:** STEP 1 must say "HALT. Spoken turn only — zero tool calls." Without this, Haiku may combine the service question with a tool call on the same turn.
+
 ---
 
 ## Node 3 — Availability Handler
