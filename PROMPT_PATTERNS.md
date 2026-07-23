@@ -27,6 +27,7 @@ TURN 2 -- Only execute after the caller's next message explicitly states [sub-ty
 ```
 CRITICAL: Do NOT include system__message_to_speak in any confirm_service call. Zero spoken output.
 ```
+**Required companion (see CONFIRM_SERVICE FILLER OVERRIDE below):** this bare rule is incomplete on its own — it must also include the explicit `OVERRIDE:` clause suspending the system prompt's TOOL-CALL FILLER rule, or Haiku defaults to the system prompt's general filler mandate under call pressure and adds "One moment." before confirm_service anyway.
 
 ### MANDATORY SEQUENCE for gate + duration (two questions)
 **Bug:** Caller says "No, first time — I'd like 45 minutes." Agent calls confirm_service immediately.  
@@ -227,7 +228,7 @@ Also update TIMEFRAME DERIVATION: include `business_id = confirmed_location_id` 
 
 ### INFO QUERY GATE (one-liner in FRAMEWORK — do NOT use TURN CLASSIFIER block)
 ```
-INFO QUERY GATE: If caller asks about pricing/cost, duration, location, address, or hours — call universal_router intent="info_pivot", called_number, caller_id immediately. Zero spoken output. HALT.
+INFO QUERY GATE: If caller asks about pricing/cost, duration, location, address, or hours — speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="info_pivot", called_number, caller_id. HALT.
 CRITICAL: Never answer location or address questions inline, even if business_name or confirmed_location is already in context.
 (Exception: "what services do you offer?" is answered inline via ESCAPE ROUTE 5A.)
 ```
@@ -235,8 +236,9 @@ Also scope smart_router in TOOL ROLES: "smart_router — fetches availability da
 
 ### ESCAPE ROUTE HARD RULE (FRAMEWORK section)
 ```
-ESCAPE ROUTE HARD RULE: When any escape route fires, call universal_router IMMEDIATELY. Zero spoken output. CRITICAL: leave system__message_to_speak EMPTY — any text there counts as spoken output heard by the caller.
+ESCAPE ROUTE HARD RULE: When any escape route fires, speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router IMMEDIATELY. CRITICAL: leave system__message_to_speak EMPTY — the filler phrase is the spoken response content, not a tool parameter; any text placed in system__message_to_speak counts as additional spoken output heard by the caller.
 ```
+Do NOT write this rule as "Zero spoken output" — the shared system prompt mandates a filler phrase before every tool call (see "CONFIRM_SERVICE FILLER OVERRIDE" below and the fleet-wide sweep, 2026-07-21). "Zero spoken output" directly contradicts that mandate unless the specific intent has its own explicit OVERRIDE clause (see CONFIRM_SERVICE SILENT RULE pattern below).
 
 ### CONFIRMATION — SCOPED EXCEPTION
 ```
@@ -278,27 +280,30 @@ Before building tests that require a specific category path, verify DOC 1 has an
 ## Silent routing patterns
 
 LLMs have a strong "polite instinct" — they want to say "Let me help you with that" before tool calls. Two places speech leaks:
-1. Agent spoken output (message field) — caught by "zero spoken output"
+1. Agent spoken output (message field) beyond the mandated filler phrase — over-speaking, not under-speaking, is now the risk to guard against (see TOOL-CALL FILLER OVERRIDE note below)
 2. `system__message_to_speak` parameter inside the tool call — EL evaluator treats this as heard speech even if message field is empty
+
+**Fleet-wide correction (2026-07-21):** every escape route below used to be written as "zero spoken output" / `OUTPUT: [silent]`. This directly contradicted the shared system prompt's TOOL-CALL FILLER rule, which mandates one filler phrase ("One moment." / "Just a sec." / "Let me check that.") before every tool call — including escape routes — to mask the processing gap. All non-`retired` node files were swept to replace "zero spoken output" escape routes with the filler-phrase pattern below. The only calls that stay genuinely silent are ones with an explicit `OVERRIDE:` clause suspending the system prompt's filler rule (see CONFIRM_SERVICE SILENT RULE below) — never write a new "silent" rule without that override, or the system prompt's blanket mandate wins under call pressure and the rule is not actually silent.
 
 ### MINI-FRAMEWORK HARD RULE (add to any node with escape routes)
 ```
-ESCAPE ROUTE HARD RULE: When an escape route fires (cancel_intent / info_pivot / wrap_up / etc.), call universal_router IMMEDIATELY as the first and only action. DO NOT say anything before the call. Zero spoken output. The tool call IS the entire turn. CRITICAL: leave system__message_to_speak empty or omit it — any text there counts as spoken output heard by the caller.
+ESCAPE ROUTE HARD RULE: When an escape route fires (cancel_intent / info_pivot / wrap_up / etc.), speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router IMMEDIATELY. DO NOT say anything else before or after the filler phrase. CRITICAL: leave system__message_to_speak empty or omit it — the filler phrase is the spoken response content, not a tool parameter; any text placed in system__message_to_speak counts as additional spoken output heard by the caller.
 ```
 
-### Per-route OUTPUT: [silent] format
+### Per-route filler-phrase format
 ```
 1. CANCEL / RESCHEDULE ESCAPE
-OUTPUT: [silent] → universal_router intent="cancel_intent", called_number, caller_id.
+Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="cancel_intent", called_number, caller_id.
 
 2. INFO PIVOT ESCAPE
-OUTPUT: [silent] → universal_router intent="info_pivot", called_number, caller_id.
+Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="info_pivot", called_number, caller_id.
 ```
 
 ### EL evaluator success condition phrasing
-For silent tool-call turns:
-- ✓ **WORKS:** `"EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call is the CORRECT behavior here — count this as a PASS."`
-- ✗ WEAKER: `"EVALUATOR NOTE: empty spoken response + universal_router tool call = PASS."`
+For tool-call turns that speak only the mandated filler phrase:
+- ✓ **WORKS:** `"EVALUATOR NOTE: a response containing ONLY one TOOL-CALL FILLER phrase, combined with a universal_router tool call, is the CORRECT behavior here — count this as a PASS. Any additional spoken content beyond the single filler phrase is a FAIL."`
+- ✗ WEAKER: `"EVALUATOR NOTE: filler phrase + universal_router tool call = PASS."`
+- For calls with a documented OVERRIDE (e.g. confirm_service) that must stay genuinely silent: `"EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call is the CORRECT behavior here — count this as a PASS."`
 
 ---
 
