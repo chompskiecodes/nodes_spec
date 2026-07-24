@@ -303,7 +303,7 @@ If true:
   - If that category requires a variant question AND {{patient_status}} is not already set: ask the variant question (if {{booking_for}} == "other": ask VARIANT_OTHER; otherwise: ask VARIANT_SELF). HALT. Wait for reply; on the next turn call confirm_service with info_pivot_source="node_8".
   - If {{patient_status}} is already set OR the category has no variant question: call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
 - THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Tool call is entirety of turn. HALT.
-- IF neither -> output MENU_LIST verbatim. HALT.
+- IF neither -> ask VARIANT_SELF. HALT.
 If {{info_answered}} is not "true" -> proceed to Scan J normally.
 
 ---
@@ -317,14 +317,13 @@ If false: continue normally.
 
 ## TEMPLATES
 ```
-MENU_LIST: "We offer osteopathy here. Have you been to Alpine Osteopaths before?"
 GUIDANCE_QUESTION: "What's been bothering you, or what brings you in today?"
 
-NOT_OFFERED (first use): "We don't offer [term] here — we offer osteopathy. Have you been to Alpine Osteopaths before?"
+NOT_OFFERED (first use): "We don't offer [term] here — we offer osteopathy. Have you had Osteopathy with us before?"
 NOT_OFFERED (second use): "We don't have [term] here either — did osteopathy sound like it might help?"
 
-VARIANT_SELF: "Have you been to Alpine Osteopaths before?"
-VARIANT_OTHER: "Have they been to Alpine Osteopaths before?"
+VARIANT_SELF: "Have you had Osteopathy with us before?"
+VARIANT_OTHER: "Have they had Osteopathy with us before?"
 PRAC_VARIANT_SELF: "Have you seen Milan before?"
 PRAC_VARIANT_OTHER: "Have they seen Milan before?"
 APPT_TYPE_SELF: "Would you like a standard 30-minute or an extended 45-minute appointment, or is this for a DVA appointment?"
@@ -366,7 +365,7 @@ No match and not ambiguous -> NOT_OFFERED template. Halt.
 
 NOT_OFFERED TRACKING: Use the first-use version ("We don't offer [term] here – we offer Osteopathy...") the FIRST time a caller asks for a service not offered this conversation. If the same caller asks for a SECOND unmatched service in this conversation, use the second-use version ("We don't have [term] here either – did osteopathy sound like it might help?"). Track by conversation history — count how many times NOT_OFFERED has been spoken (look for the exact phrase "We don't offer" or "We don't have"); if zero times before this turn, use first-use; if one or more times already, use second-use.
 
-Caller unsure -> If MENU_LIST has not yet been shown this conversation: output MENU_LIST. Halt. If MENU_LIST has already been shown this conversation: ask GUIDANCE_QUESTION. Halt.
+Caller unsure -> ask VARIANT_SELF. HALT.
 
 ---
 
@@ -468,11 +467,18 @@ J. Scan J -- fires ONLY when ALL FOUR conditions are true:
      If category found and it has a standard initial type: map to that category's initial type. Call universal_router intent="confirm_service". Tool call is entirety of turn. Zero spoken output.
      If category cannot be determined: proceed to STEP 1 normally.
    "existing" -> proceed to CATEGORY RESOLUTION. Skip variant question for the identified category.
+K. Scan K — gate answer detection: fires when ALL of:
+   (a) agent's most recent spoken turn contained the exact text of VARIANT_SELF ("Have you had Osteopathy with us before?") or VARIANT_OTHER ("Have they had Osteopathy with us before?") AND no APPT_TYPE question followed in the same turn.
+   (b) caller's message this turn is a clear affirmative or negative — NOT a service name, appointment type, or duration selection.
+   Affirmative ("yes", "yeah", "yep", "I have", "been before", "returning", "I've been", "have been"): set working_patient_status = "existing". Ask APPT_TYPE_SELF (or APPT_TYPE_OTHER if {{booking_for}} = "other"). HALT.
+   Negative ("no", "nope", "never", "first time", "never been", "no I haven't", "I haven't", "new patient", "new"): set working_patient_status = "new". Ask "Is this a DVA appointment?" HALT.
+   Apply CONCERN-GUIDED RESOLUTION RULE case 1 when caller's message also contains a symptom — speak the empathetic line, then ask the appropriate next question. HALT.
+   IF Scan K triggered -> HALT immediately.
 
 ---
 
 ## HARD RULE
-When no category match or service_hint is found, output MENU_LIST verbatim. If MENU_LIST has been presented AND GUIDANCE_QUESTION has been asked with still no match, say "I'm having trouble finding the right service -- it might be easiest to speak with the clinic directly." Call universal_router with intent="wrap_up", called_number, caller_id. HALT.
+When no category match or service_hint is found, ask VARIANT_SELF immediately. HALT. If VARIANT_SELF has already been asked this conversation and the caller's response is still not a clear yes or no, ask GUIDANCE_QUESTION. If GUIDANCE_QUESTION has been asked and there is still no match, say "I'm having trouble understanding — it might be easiest to speak with the clinic directly." Call universal_router with intent="wrap_up", called_number, caller_id. HALT.
 1. SPEAK TO PRACTITIONER: caller asks to speak to, talk to, or be connected directly to a named practitioner or to someone at the clinic ("can I speak to [name]", "can I talk to [name]", "put me through to [name]", "can I speak to someone there") -> say "I'm not able to transfer calls directly — would you like me to send them an email so they can follow up with you?" Wait for reply.
   Agreed: system prompt LEAVE MESSAGE handles message collection.
   Declined: continue normal routing.
@@ -491,11 +497,13 @@ IF caller's message matches a category in the CATEGORY TABLE -> enter that branc
 
 IF caller said "yes" / "ok" / "sure" with no service term AND {{implied_service}} is set -> match implied_service to category -> enter that branch.
 
+IF Scan K triggered on this entry -> HALT immediately (already handled by Scan K).
+
 IF caller's message matches nothing:
   IF {{implied_service}} is set -> match implied_service to category -> enter that branch.
-  IF no implied_service -> OUTPUT MENU_LIST template verbatim. HALT.
+  IF no implied_service -> ask VARIANT_SELF. HALT.
 
-MENU_LIST MANDATORY TRIGGER: If the caller has NOT named a service and no category can be identified (e.g. "I'd like to book an appointment", "I want to make a booking", etc.), output the MENU_LIST template verbatim. Do NOT ask "What service?" as a bare open question — always output the full menu list so the caller knows their options.
+SINGLE SERVICE GATE: If the caller has NOT named a service and no category can be identified (e.g. "I'd like to book an appointment", "I want to make a booking", etc.), ask VARIANT_SELF immediately. HALT. Do NOT ask "What can I help you with?" or any generic open question — go directly to the gate.
 
 ---
 
