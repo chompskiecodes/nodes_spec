@@ -227,9 +227,19 @@ LOCATION ID MAPPING: [hardcode name → confirmed_location_id for each location]
 Also update TIMEFRAME DERIVATION: include `business_id = confirmed_location_id` if `confirmed_location` is set.
 
 ### INFO QUERY GATE (one-liner in FRAMEWORK — do NOT use TURN CLASSIFIER block)
+**Stale as of 2026-06-22:** this block predates the dedicated PRICING QUERY signal added to
+`system_prompt.txt` fleet-wide (`5bac7f1`, 2026-06-22). Folding "pricing/cost" into the same
+gate as info_pivot silently shadows that later, more specific system-prompt rule — plain
+pricing questions get ejected to Node 8 via info_pivot instead of answered inline via
+`get_service_price`. This exact contradiction was found independently in
+`node_2c_complaint_intake.txt` (Ryde Health) and in the `## RULES` block of 4 clinics' node_2
+files (healing_hands_hand_therapy, yandina_podiatry, speeding_health,
+intuitive_health_and_wellness) — all four likely trace back to this template. Use the carved-out
+version below for any new node; the old one-liner should not be copied again.
 ```
-INFO QUERY GATE: If caller asks about pricing/cost, duration, location, address, or hours — speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="info_pivot", called_number, caller_id. HALT.
+INFO QUERY GATE: If caller asks about duration, location, address, or hours — speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="info_pivot", called_number, caller_id. HALT.
 CRITICAL: Never answer location or address questions inline, even if business_name or confirmed_location is already in context.
+Plain pricing, cost, or fee questions are NOT part of this gate — they are handled by the system prompt's PRICING QUERY block instead (calls get_service_price directly, stays in this node). Only route price+duration combined asks or coverage-conditional pricing (EPC/Medicare/NDIS/insurance) here, per the system prompt's own PRICING QUERY carve-outs.
 (Exception: "what services do you offer?" is answered inline via ESCAPE ROUTE 5A.)
 ```
 Also scope smart_router in TOOL ROLES: "smart_router — fetches availability data ONLY (never for pricing, service info, or non-availability queries)."
@@ -297,6 +307,23 @@ HALT.
 
 ### DOC 1 must include modality-specific complaint
 Before building tests that require a specific category path, verify DOC 1 has an entry that produces that path.
+
+### Node-local escape routes silently absorbing a more specific system-prompt rule
+**Bug (found 2026-08-04):** INFO PIVOT ESCAPE listed "pricing" as a trigger example
+("purely informational question... (pricing, address, hours, ...)"). This pre-dates the
+dedicated PRICING QUERY signal in `system_prompt.txt` (see stale INFO QUERY GATE note under
+Node 3 above) — plain pricing questions were silently ejected to Node 8 via `info_pivot`
+instead of answered inline via `get_service_price`. Same session also found CANCEL / RESCHEDULE
+ESCAPE's trigger included "...or check an existing appointment", which shadows the system
+prompt's separate PATIENT APPOINTMENT LOOKUP (`intent="details"`) — a caller who only wants to
+confirm a time got routed into the cancellation node instead of getting an inline answer.
+**Fix:** remove "pricing" from INFO PIVOT ESCAPE's example list and "or check" from CANCEL /
+RESCHEDULE ESCAPE's trigger; add one positive line to each pointing at the correct inherited
+tool/intent instead of just deleting the wrong path. General lesson: when a node-local escape
+route's trigger list was written before a more specific system-prompt rule existed, the local
+list can silently swallow cases that rule was meant to own. Worth a quick check any time a new
+system-prompt-level signal is added — grep existing node escape routes for the same trigger
+words.
 
 ---
 
