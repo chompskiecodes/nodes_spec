@@ -257,6 +257,29 @@ Do NOT add "(exception: CONFIRMATION block only)" to this line. Keep prohibition
 
 ---
 
+## Node 6 — Name Collection (Haiku-slim, experimental — see `.claude/rules/node6-haiku-slim-design.md`)
+
+### "Already known" checks must cover both name sources, not just the DV-lookup pair
+**Bug (round-1 self-audit, 2026-08-04):** a NAME step's "already known, skip collection" check
+tested only `{{caller_first_name}}`/`{{caller_last_name}}` (the confirmed-CRM-record pair) and
+never checked `{{patient_name_raw}}` (the raw name captured earlier in the same call, e.g. at
+the greeting node, before any CRM lookup). Scenario probes that set `patient_name_raw` alone
+still passed — but only because the caller's own message in those scenarios happened to restate
+the name in text, giving the model an alternate path to the right answer that didn't actually
+exercise the DV-check branch. A scenario with `patient_name_raw` set via DV only and *zero*
+name mention in the caller's current message (`PNR1` in the scenarios file) is what actually
+proves the branch exists.
+**Fix:** any "is this field already known" check with two possible sources (a confirmed
+DV-lookup pair vs. a raw-captured single field) needs an explicit branch for each source, not
+just the one that happens to be top-of-mind while drafting — and the regression scenario for it
+must withhold the other source (no textual restatement) or it doesn't actually test the branch.
+**Detection:** this class of gap surfaces in stumbling points, not scenario failures — the audit
+model can flag "the written rule doesn't explicitly cover source X" even when every existing
+scenario coincidentally passes anyway. Treat a stumbling point about an unhandled data source as
+actionable even at a 100% scenario pass rate; don't dismiss it just because nothing failed.
+
+---
+
 ## Node 2C — Complaint Intake
 
 ### Style deferral guard
