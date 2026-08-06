@@ -12,7 +12,7 @@ Targeted scaffold test for the failing scenario in Node 6a (Name Collection – 
 DV injection mechanism:
     ElevenLabs test simulation substitutes dynamic_variable_placeholders into {{dv_name}}
     tokens in the prompt.  Setting caller_phone="+61412345678" in the placeholders makes
-    PRE-COLLECTION and step 2 see a real, non-anonymous number — exactly what call init
+    step 2 see a non-empty number — exactly what call init
     does at runtime via twilio_init_webhook.py (dynamic_vars["caller_phone"] = caller_id).
 
 Node 6a is Override: Disabled → system_prompt.txt is prepended to its Additional Prompt
@@ -203,10 +203,9 @@ def generate_tests() -> List[Dict]:
         Agent must proceed directly to step 3: ask for email.
 
     What this proves:
-        The PRE-COLLECTION gate ("{{caller_phone}} or {{caller_id}} holds a value other than
-        'anonymous'") fires correctly when the DV is populated via call init.  This is the
-        exact condition that was failing: agents were asking "And what's a good number to
-        reach you on?" even when caller_phone was already set.
+        The step 2 MANDATORY gate fires correctly when caller_phone is non-empty (set by
+        call init).  This is the exact condition that was failing: agents were asking "And
+        what's a good number to reach you on?" even when caller_phone was already set.
 
     NOTE: name confirmation uses the standard CONFIRM path (spell surname letter-by-letter →
     read back → caller says "yes").  The final user message ("Yes, that's right.") resolves
