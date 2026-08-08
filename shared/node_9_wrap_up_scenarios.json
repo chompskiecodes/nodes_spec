@@ -146,6 +146,57 @@
       ],
       "expected_behavior": "PASS if: agent speaks one filler phrase then calls universal_router intent='send_details_to_caller' with payload detail_type='both' and includes appointment_type, appointment_date, appointment_time, business_name from the DVs. FAIL if: detail_type='address' is used (caller explicitly asked for the booking too); FAIL if detail_type='booking' is used (caller also asked for address); FAIL if appointment details are absent from payload.",
       "tags": ["core", "send-details"]
+    },
+    {
+      "name": "details-ack: first delivery speaks message and calls details_ack in the same turn",
+      "history": [
+        {"role": "user", "content": "Can you check when my appointment is?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[universal_router intent=details response]: {\"success\": true, \"message\": \"It looks like your appointment was scheduled for this Thursday at 2 PM.\", \"patient_lookup_done\": \"true\"}"}
+      ],
+      "dvs": {"patient_lookup_done": "true", "details_delivered": ""},
+      "expected_behavior": "PASS if: this response contains BOTH the spoken message field verbatim ('It looks like your appointment was scheduled for this Thursday at 2 PM.') AND a details_ack tool call — both in the same turn (CHECK 2 / MANDATORY PART 1+2). FAIL if: only one of the two appears, or the agent calls universal_router intent='details' again instead of details_ack.",
+      "tags": ["details-ack-one-shot"]
+    },
+    {
+      "name": "details-ack: must not fire a second time once already completed (DV correctly reads true)",
+      "history": [
+        {"role": "user", "content": "Can you check when my appointment is?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[universal_router intent=details response]: {\"success\": true, \"message\": \"It looks like your appointment was scheduled for this Thursday at 2 PM.\", \"patient_lookup_done\": \"true\"}"},
+        {"role": "assistant", "content": "It looks like your appointment was scheduled for this Thursday at two PM."},
+        {"role": "tool", "content": "[details_ack response]: {\"details_delivered\": \"true\"}"}
+      ],
+      "dvs": {"patient_lookup_done": "true", "details_delivered": "true"},
+      "expected_behavior": "PASS if: this response does NOT call details_ack again — it either produces zero spoken output and silently calls universal_router intent='wrap_up', or otherwise makes no tool call. FAIL if: the agent calls details_ack a second time — a completed details_ack tool call already exists immediately before this turn with no caller message in between, so re-calling it is the exact multi-firing bug this scenario protects against (live Bob Ward Physiotherapy call, 2026-08-07: details_ack fired 2-4 times in a row with no caller turn between calls).",
+      "tags": ["details-ack-one-shot"]
+    },
+    {
+      "name": "details-ack: must not fire a second time even if details_delivered DV still reads stale/empty",
+      "history": [
+        {"role": "user", "content": "Can you check when my appointment is?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[universal_router intent=details response]: {\"success\": true, \"message\": \"It looks like your appointment was scheduled for this Thursday at 2 PM.\", \"patient_lookup_done\": \"true\"}"},
+        {"role": "assistant", "content": "It looks like your appointment was scheduled for this Thursday at two PM."},
+        {"role": "tool", "content": "[details_ack response]: {\"details_delivered\": \"true\"}"}
+      ],
+      "dvs": {"patient_lookup_done": "true", "details_delivered": ""},
+      "expected_behavior": "PASS if: this response does NOT call details_ack again, even though the {{details_delivered}} DV in this probe is deliberately left NOT true (simulating DV-propagation lag one turn behind the completed tool call visible in history) — a completed details_ack tool call is already visible in conversation history, and the DETAILS_ACK FIRES AT MOST ONCE rule scans history, not just the DV, before deciding whether to call it. FAIL if: the agent calls details_ack again because {{details_delivered}} reads as not-true — this is the DV-lag failure mode this scenario specifically protects against.",
+      "tags": ["details-ack-one-shot"]
+    },
+    {
+      "name": "details-ack: caller follow-up after ack uses APPOINTMENT FOLLOW-UP LOCK, not a fresh details lookup",
+      "history": [
+        {"role": "user", "content": "Can you check when my appointment is?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "tool", "content": "[universal_router intent=details response]: {\"success\": true, \"message\": \"It looks like your appointment was scheduled for this Thursday at 2 PM.\", \"patient_lookup_done\": \"true\"}"},
+        {"role": "assistant", "content": "It looks like your appointment was scheduled for this Thursday at two PM."},
+        {"role": "tool", "content": "[details_ack response]: {\"details_delivered\": \"true\"}"},
+        {"role": "user", "content": "Do I have anything else booked?"}
+      ],
+      "dvs": {"patient_lookup_done": "true", "details_delivered": "true"},
+      "expected_behavior": "PASS if: agent recalls from the already-delivered message (one appointment mentioned) and says something like 'I've checked and that's the only upcoming appointment on your account — would you like to book one?' with no tool call. FAIL if: agent calls universal_router intent='details' again, or calls details_ack again, or claims to have no record of any appointment (contradicting the message already delivered).",
+      "tags": ["details-ack-one-shot"]
     }
   ]
 }
