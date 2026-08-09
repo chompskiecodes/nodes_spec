@@ -23,6 +23,12 @@ When this node opens, the caller has just been told there is no availability on 
 MANDATORY PART 1 (output first, no exceptions): speak "Would you like me to add you to the waitlist, or would you prefer to look for a different date?"
 Stop — wait for the caller's response.
 
+NAME GATE (evaluate only when caller accepts the waitlist — before every waitlist_add call)
+Check in order — first match sets patient_name and proceeds immediately to calling waitlist_add:
+1. {{caller_first_name}} and {{caller_last_name}} both non-empty: patient_name = "{{caller_first_name}} {{caller_last_name}}". Call waitlist_add.
+2. {{patient_name_raw}} non-empty: patient_name = "{{patient_name_raw}}". Call waitlist_add.
+3. Name unknown: ask "What's your name for the waitlist?" — first space-separated token is the first name, every remaining token joined is the last name. Then ask "And could you spell your last name for me?" — read the letters back uppercase, comma-separated: "So that's [LETTERS] — is that right?" — once confirmed, call waitlist_add with the collected patient_name.
+
 RESPONSE HANDLING
 Evaluate the caller's response against these branches in order. First match wins.
 
@@ -30,7 +36,7 @@ A. YES + TIMEFRAME — caller says yes but also names a different date to search
    Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="waitlist_search_next", called_number, caller_id, payload={"timeframe_raw": "<caller's stated timeframe in their own words>"}. Stop.
 
 B. YES TO WAITLIST — caller accepts the waitlist without naming a new date ("yes please", "add me to the waitlist", "that would be great", "sure", "okay"):
-   Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="waitlist_add", called_number, caller_id, payload={"appointment_type_id": "{{appointment_type_id}}", "appointment_type": "{{appointment_type}}", "requested_date": "{{appointment_date}}", "booking_for": "{{booking_for}}"}. Stop.
+   Apply NAME GATE above. Once patient_name is resolved, speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="waitlist_add", called_number, caller_id, payload={"appointment_type_id": "{{appointment_type_id}}", "appointment_type": "{{appointment_type}}", "requested_date": "{{appointment_date}}", "booking_for": "{{booking_for}}", "patient_name": "<patient_name from NAME GATE>"}. Stop.
    After the tool returns: speak the message field verbatim from the result. Then ask "Is there anything else I can help you with?" Stop.
 
 C. NO + TIMEFRAME — caller declines the waitlist but names a different date ("no thanks, can you try next Tuesday instead", "no, what about the week after?", "not the waitlist but can you check Thursday?"):
@@ -41,6 +47,8 @@ D. DECLINES BOTH — caller declines the waitlist and doesn't name a new date to
 
 E. CANCEL INTENT — caller wants to cancel an existing appointment:
    Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="cancel_intent", called_number, caller_id. Stop.
+
+NAME COLLECTION CONTINUATION: if the NAME GATE is in progress (name asked but not yet confirmed), stay in this node and continue the name collection — ask for the spelling, confirm the letters, then proceed to call waitlist_add once confirmed. Do not re-ask the waitlist question.
 
 NEXT SEARCH: after waitlist_search_next returns (uni_router_intent="return_to_availability"), the backward edge on Node 3a fires automatically and returns the call to Node 3 for a fresh availability search. No action required in this node.
 
