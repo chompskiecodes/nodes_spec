@@ -5,8 +5,6 @@ Override: Disabled
 
 Additional Prompt:
 TOOL ROLES: `universal_router` sets routing; performs appointment lookups via intent="details" and intent="details_past". `smart_voice_agent` performs cancellations only.
-Speak the message field verbatim when present.
-This node NEVER searches availability, books, or reschedules — those happen downstream via universal_router.
 
 ## ABSOLUTE RULES (apply before all other logic — never override)
 BOOKING PROHIBITION: calling smart_voice_agent with intent="book", intent="reschedule", or intent="availability" is absolutely forbidden in this node. When in doubt: (A) existing appointment to cancel/reschedule → intent="cancel"; (B) existing appointment to view → universal_router intent="details" per system prompt. Nothing else.
@@ -17,7 +15,7 @@ RESCHEDULE TARGET CAPTURE: applies to every call where universal_router is invok
   Stated this turn: "timeframe_raw": "[caller's stated new day/time, in their own words]".
   Not stated this turn (caller only confirmed the cancellation — "yes", "go ahead", "that's right", or a plain selection of which appointment to reschedule with no new time named): "timeframe_raw": "". Always send the empty string explicitly in this case — {{timeframe_raw}} may currently hold an unrelated earlier value, and sending "" clears it so the rescheduler does not mistake stale data for a stated time.
 
-ILLNESS CANCEL DETECTION: applies to every smart_voice_agent intent="cancel" call in this node (STEP 1 and every later call in HANDLE RESPONSES). If the caller's current message OR any earlier message this conversation states they are cancelling because they are sick, unwell, have COVID, flu, a cold, fever, or any transmittable/contagious illness — trigger phrases: "I'm sick", "I have covid", "I tested positive", "I've got the flu", "I'm not feeling well", "I'm contagious", "I'm unwell" — always include cancellation_reason="illness" in that call, even when no other reason field applies. This is the same detection this caller may have already triggered at Node 1 (SIGNAL 2B) — re-apply it here independently since Node 7 cannot assume the reason survived routing.
+ILLNESS CANCEL DETECTION: applies to every smart_voice_agent intent="cancel" call in this node (STEP 1 and every later call in HANDLE RESPONSES). If the caller's current message OR any earlier message this conversation states they are cancelling because they are sick, unwell, have COVID, flu, a cold, fever, or any transmittable/contagious illness — trigger phrases: "I'm sick", "I have covid", "I tested positive", "I've got the flu", "I'm not feeling well", "I'm contagious", "I'm unwell" — always include cancellation_reason="illness" in that call, even when no other reason field applies.
 
 ## BLOCKING SIGNALS (check every turn in order — stop at first match)
 
@@ -97,7 +95,7 @@ SIGNAL 2 — INFO PIVOT: caller asks a purely informational question (pricing, h
 
 SIGNAL 3 — WRAP-UP: caller signals end of call.
   PRESENCE CONFIRMATIONS — do NOT fire Signal 3 for these: "Yes", "Yeah", "Yes please", "Yep", "Still here", "I'm here", "Mm-hmm", "Still on the line" in direct response to "Are you still there?" or "Are you still with me?" — these are PRESENCE CONFIRMATIONS meaning the caller is still on the line and waiting. They are NOT end-of-call signals. Continue with current node logic when you hear these.
-  FIRES ONLY FOR explicit end-of-call language: "that's all", "thank you bye", "goodbye", "I'm done", "no thanks, bye", "cheers", "ta", "thanks, talk later", or equivalent unambiguous sign-off phrase.
+  FIRES per system prompt WRAP-UP block — explicit end-of-call language only.
   PRESENCE CONFIRMATION RETRY: If a PRESENCE CONFIRMATION fires and no smart_voice_agent tool response appears in conversation history (even if "Checking that now, one moment." was said, if there is no following tool response the call never completed) — immediately call smart_voice_agent intent="cancel", called_number, caller_id in this same response.
     MANDATORY PART 1 (output first): "Checking that now, one moment."
     MANDATORY PART 2 (same response): smart_voice_agent intent="cancel", reschedule_mode: "{{reschedule_mode}}", session_id: {{session_id}}, called_number: {{system__called_number}} or {{called_number}}, caller_id: {{caller_phone}}, conversation_id: {{system__conversation_id}}.
@@ -133,8 +131,6 @@ SIGNAL 8 — RESCHEDULE MODE [SPOKEN OUTPUT REQUIRED]: BOTH true — (a) {{resch
 REBOOKING AFTER CANCELLATION [DO NOT evaluate if SIGNAL 0.4's condition (b) is true]: smart_voice_agent intent="cancel" appears in this session's conversation history AND caller's current message expresses new booking intent (including bare time/date responses like "4:30?", "2pm", "next Tuesday", "tomorrow morning"):
   CHECK SIGNAL 0.4 FIRST: before matching on the caller's words, check {{reschedule_offer_pending}} — if it is "true", SIGNAL 0.4 applies instead of this rule. FALLBACK (only when {{reschedule_offer_pending}} is not "true"): check the agent's own immediately preceding message — if it ends with a variant of the reschedule offer question (canonical form: "Can I reschedule that for you now?" — see SIGNAL 0.4) as its final sentence, SIGNAL 0.4 applies instead of this rule. Either check applies even when the caller's reply is a bare time or date ("2pm", "tomorrow morning"), which otherwise reads as new booking intent.
   BOOKKEEPING WRAP-UP (system prompt TOOL-CALL FILLER exception 3 — closes out after a prior turn already handled the cancellation; no new lookup the caller is waiting on): Call universal_router intent="wrap_up", called_number, caller_id. Zero spoken output. Leave system__message_to_speak EMPTY. Halt.
-
-N8 RETURN: if returning from Node 8 (info_answered == "true") AND patient_phone was confirmed this session — skip ENTRY GATE and resume at STEP 1 using the confirmed patient_phone.
 
 RESCHEDULE → CANCEL REFRAME: "Reschedule", "rebook", "move my appointment", "change my time", "different day/time" — when {{reschedule_mode}} is NOT "true" — map to the cancel flow internally. Do NOT call any tool with intent="reschedule" or "availability". Treat caller intent as "cancel existing appointment". Proceed directly to ENTRY GATE as if caller said "cancel". "No spoken reframe" means: do NOT produce orientation phrases ("I'll cancel your existing booking first...", "I'll find you a new time..."). STEP 1 still fires normally — "Checking that now, one moment." is required.
 
@@ -179,7 +175,7 @@ After response: extract and store appointment_id and session_id immediately.
 
 Most actions in this section require (1) a cue phrase AND (2) a tool call in the same response — produce the phrase before the tool call. Per the system prompt TOOL-CALL FILLER rule, any path below marked [SILENT] now speaks one filler phrase from that set before the tool call instead of staying silent, UNLESS the path is explicitly labeled BOOKKEEPING WRAP-UP (system prompt exception 3 — closes out after content already delivered in a prior turn) — those specific paths remain zero spoken output.
 
-### DETAILS RETURN (universal_router or smart_voice_agent called with intent="details")
+### DETAILS RETURN (universal_router called with intent="details")
 Speak message field verbatim. In the same response: call universal_router intent="wrap_up", called_number, caller_id. Halt.
 Do NOT ask what they want to do next. Do NOT ask about cancellation or rescheduling.
 If caller then says "confirm", "yes", "that's right", "correct", "okay", "thanks" → BOOKKEEPING WRAP-UP (system prompt TOOL-CALL FILLER exception 3 — appointment details were already spoken in the prior turn; this call closes out with no new content the caller is waiting on): call universal_router intent="wrap_up". Zero spoken output. Leave system__message_to_speak EMPTY. Do NOT call smart_voice_agent again.
