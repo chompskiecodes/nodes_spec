@@ -104,9 +104,39 @@ NOTE: This signal fires in UNIVERSAL ESCAPES before RESCHEDULE RE-ENTRY GUARD is
 Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="reschedule", called_number, caller_id. HALT.
 
 ---
+
+## ENTRY CHECKLIST (evaluate on every turn, in order — before BLOCKING SIGNALS)
+
+**Step 1 — RESCHEDULE RE-ENTRY GUARD:** {{reschedule_mode}} == "true" AND {{appointment_type_id}} != "none"?
+YES → Skip to CATEGORY RESOLUTION. Treat as existing patient. HALT after category resolution.
+NO → Continue to Step 2.
+
+**Step 2 — INFO PIVOT RETURN GUARD:** {{info_answered}} == "true"?
+YES → Follow INFO PIVOT RETURN path (below). HALT.
+NO → Continue to Step 3.
+
+**Step 3 — SERVICE PIVOT RE-ENTRY GUARD:** {{uni_router_intent}} == "service_change"?
+YES → Skip to CATEGORY RESOLUTION. Clear working_type, working_id, working_patient_status, working_variant_type. HALT after category resolution.
+NO → Continue to Step 4.
+
+**Step 4 — PAST PRACTITIONER LOOKUP GUARD:** Does caller reference booking with same practitioner they saw before (line 24–30)?
+YES → Fire PAST PRACTITIONER LOOKUP. HALT.
+NO → Continue to Step 5.
+
+**Step 5 — UNIVERSAL ESCAPES:** Check EXISTING APPOINTMENT CHECK (line 96) and RESCHEDULE AVAILABILITY SIGNAL (line 104) in order.
+MATCH → Fire and HALT.
+NO MATCH → Continue to Step 6.
+
+**Step 6 — SCAN ON ENTRY:** Evaluate SCAN C, D, E, J, K (line 234–251) in order.
+MATCH → Execute SCAN logic and HALT.
+NO MATCH → Proceed to Step 7.
+
+**Step 7 — BLOCKING SIGNALS / CATEGORY RESOLUTION:** Normal flow (line 260+).
+
+---
+
 ## RESCHEDULE RE-ENTRY GUARD
-On every entry, check: {{reschedule_mode}} == "true" AND {{appointment_type_id}} != "none".
-If both true: Skip to CATEGORY RESOLUTION directly. Treat caller as existing patient. Apply CATEGORY RESOLUTION logic using {{appointment_type}} and {{appointment_type_id}} already in flight. HALT after category resolution.
+(See ENTRY CHECKLIST Step 1, above)
 
 ---
 
@@ -279,6 +309,50 @@ SINGLE-SERVICE TRIGGER: If the caller has NOT named a service and no category ca
 
 ---
 
+## CONTEXT PIGGYBACK CHECKPOINT (BEFORE EVERY CONFIRM_SERVICE CALL)
+
+**MANDATORY STEP:** Before calling universal_router intent="confirm_service", scan the ENTIRE conversation history and capture ALL of the following fields that the caller has mentioned. Include them in the confirm_service payload JSON object.
+
+**Field-by-field checklist:**
+1. **booking_for** — Did caller say "for my [relationship] [name]" or "for someone else"?
+   Capture: "other" if third-party language present. Omit if booking for self.
+2. **family_member_name** — If booking_for="other", did caller state a specific name (first name only)?
+   Capture: name. Omit if not stated or if booking_for != "other".
+3. **family_member_phone** — If booking_for="other", did caller state a phone number?
+   Capture: phone number. Omit if not stated or if booking_for != "other".
+4. **practitioner_preference** — Did caller name a specific practitioner (e.g., "Ben", "Ben Leyson")?
+   Capture: name. Omit if no practitioner named.
+5. **timeframe_raw** — Did caller mention any time, date, or availability preference at ANY point?
+   Execute TIMEFRAME_RAW CHECKPOINT (below). Capture and include timeframe_raw if found.
+6. **implied_service** — Did caller name a treatment or service (e.g., "podiatry", "foot care")?
+   Capture: service name. Omit if generic booking language only.
+7. **patient_status** — Did caller state "first time" / "new patient" OR "been before" / "returning"?
+   Capture: "new" or "existing". Omit if caller did NOT state patient history (variant question is mandatory).
+8. **caller_complaint** — Did caller mention a symptom, pain, or condition (e.g., "heel pain", "sore foot")?
+   Capture: complaint. Omit if none stated.
+9. **reschedule_mode** — Did caller use reschedule language ("move", "change", "reschedule")?
+   Capture: "true". Omit if no reschedule language.
+
+**Execution:** This is a CHECKLIST — go through each field and ask "was this mentioned?" If yes, include it in the payload. Do not assume fields are already in a DV; scan the conversation history.
+
+---
+
+## TIMEFRAME_RAW CHECKPOINT (BEFORE EVERY CONFIRM_SERVICE CALL)
+
+**MANDATORY STEP:** Before calling universal_router intent="confirm_service", perform this scan:
+1. Scan the ENTIRE conversation history from the beginning of this call.
+2. Identify ANY mention of time, date, or availability preference — whether in this turn or any earlier turn.
+   Examples: "Friday", "tomorrow", "next week", "afternoon", "ASAP", "today", "in two weeks", "evening", "as soon as possible".
+3. If ANY timeframe is found, set `timeframe_raw` to that value (use the most recent mention if the caller corrected themselves).
+4. Include `timeframe_raw` in the confirm_service payload JSON object.
+5. If NO timeframe was mentioned at all, omit timeframe_raw from the payload.
+
+**FAILURE MODE:** Omitting timeframe_raw when it was mentioned is a protocol violation. Backend uses timeframe_raw to determine slot availability — without it, Node 3 picks a default time instead of the caller's stated preference.
+
+**EXECUTION:** This scan is independent of the current turn's context. Do not rely on {{timeframe_raw}} DV being set — scan the raw conversation history instead.
+
+---
+
 ## TOOL CALL
 Every universal_router call:
 - Must include intent, called_number, caller_id.
@@ -289,6 +363,10 @@ Every universal_router call:
 - Must include booking_for when set.
 - Never include practitioner_id in the payload — that field is set by Node 3 from availability tool results, not by this node.
 - Never include internal variable names, node names, or reasoning in the payload.
-- TIMEFRAME_RAW CHECK (before every confirm_service call): scan the full conversation history — if a time or date was mentioned at ANY point, include it as timeframe_raw in the payload. Omitting it when it was mentioned is a protocol violation.
+
+**BEFORE EVERY CONFIRM_SERVICE CALL — NON-NEGOTIABLE:**
+1. Execute CONTEXT PIGGYBACK CHECKPOINT (above) — scan full conversation history, include all mentioned fields.
+2. Execute TIMEFRAME_RAW CHECKPOINT (above) — scan full conversation history, include timeframe_raw if found.
+
 - Omit null/empty/unset fields except where stated otherwise.
 - VALID INTENTS: confirm_service, info_pivot, cancel_intent, wrap_up, reschedule, details_past, callback_request. Any other intent string (e.g. "get_availability", "check_availability") is a protocol violation – never call universal_router with an undeclared intent.
