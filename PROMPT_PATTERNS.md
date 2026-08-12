@@ -88,6 +88,17 @@ WRONG: "Would you like to book a 15-minute or 30-minute session?"
 CORRECT: Note pending_service="chiro_existing" for next routing call, then ask "Which of our locations works — Cheltenham or Elsternwick?" HALT.
 ```
 
+### LOCATION NAME ALIAS — caller-facing name differs from Cliniko business name
+**Bug:** LOCATION_QUESTION offers a caller-facing name (e.g. "South Morang") that differs from the Cliniko business name used as the `confirmed_location` key in the restriction table (e.g. "Plenty Road"). Haiku stores the caller's literal answer without applying the LOCATION RESOLUTION mapping, finds no match in the restriction rules, and silently calls confirm_service for a forbidden combination.  
+**Symptom:** Exercise Physiology (or other restricted service) booked at a location where it's blocked — confirmed_location in the payload reads the caller's spoken name, not the Cliniko business name.  
+**Root cause (northern_physio, 2026-08-12):** LOCATION_QUESTION said "South Morang"; restriction table used `confirmed_location == "Plenty Road"`. Haiku stored "South Morang", restriction check found no match, confirm_service fired.  
+**Fix — three parts, all required:**
+1. **LOCATION RESOLUTION alias line:** list the caller-facing name alongside the Cliniko name: `"South Morang" / "Plenty Road" / "Plenty" -> "Plenty Road" / <business_id>`
+2. **STORE RULE note** (inline under that entry): `STORE RULE: store confirmed_location = "Plenty Road". If caller said "South Morang", correct it to "Plenty Road" before proceeding — never store "South Morang".`
+3. **ALIAS CORRECTION active gate** in C5 MANDATORY RESTRICTION CHECK (immediately before the rules): `ALIAS CORRECTION (active gate — run before any rule): if confirmed_location equals "South Morang", correct it to "Plenty Road" right now. The restriction rules use "Plenty Road" — evaluating with "South Morang" is a protocol error.`
+
+**Detection (onboarding):** During the +ML alias check (see `docs/new_clinic_build.md`), compare each name in LOCATION_QUESTION against the `business_name` column from the per-business audit query. Any mismatch requires all three fixes above.
+
 ### CONTEXT PIGGYBACK through long chains (booking_for="other")
 **Bug:** `booking_for="other"` and `family_member_name` drop from confirm_service payload after 5+ turns.  
 **Fix (two parts):**
