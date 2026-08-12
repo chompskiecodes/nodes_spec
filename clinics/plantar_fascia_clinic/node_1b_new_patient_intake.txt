@@ -34,19 +34,32 @@ Edges:
             "label": "1b→2. Book Intent (identity resolved)",
             "type": "expression",
             "expression": {
-                  "type": "eq_operator",
-                  "left": {
-                        "type": "dynamic_variable",
-                        "name": "uni_router_intent"
-                  },
-                  "right": {
-                        "type": "string_literal",
-                        "value": "book_intent"
-                  }
+                  "type": "and_operator",
+                  "children": [
+                        {
+                              "type": "eq_operator",
+                              "left": {"type": "dynamic_variable", "name": "uni_router_intent"},
+                              "right": {"type": "string_literal", "value": "book_intent"}
+                        },
+                        {
+                              "type": "eq_operator",
+                              "left": {"type": "dynamic_variable", "name": "identity_intake_done"},
+                              "right": {"type": "string_literal", "value": "true"}
+                        }
+                  ]
             }
       },
       "backward_condition": null
 }
+
+  NOTE (2026-08-12 edge-collision fix): the edge INTO this node (node_1 → node_1b) fires on the
+  same "uni_router_intent==book_intent" condition. Since dynamic variables persist across node
+  transitions, that condition is still satisfied the instant node_1b is entered — without the
+  identity_intake_done AND-clause above, this node's own exit edge to Node 2 would fire
+  immediately on entry, before this node's LLM ever gets a turn, skipping REASON/NAME/EMAIL
+  collection entirely. identity_intake_done defaults to "" (cleared) at call start and is only
+  ever set "true" by this node's own HANDOFF step below — see tools/universal_router_webhook.py
+  and tools/twilio_init_webhook.py for the backend wiring.
 
   Edge ID: edge_1b_pf_to_n8_info_pivot
     Source: node_1b_pf
@@ -120,8 +133,8 @@ Additional Prompt:
 - ROUTING CONSTANTS (every universal_router call): called_number={{system__called_number}} (fallback {{called_number}}), caller_id={{caller_phone}} (fallback {{caller_id}}).
 
 ## KNOWN-CALLER / EXISTING-PATIENT FAST-PATH (evaluate first, every turn, before anything below)
-{{patient_status}} == "existing" — this is a returning patient who reached book_intent (e.g. booking an additional appointment): skip REASON, NAME, and EMAIL entirely. Say one brief filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="book_intent", called_number, caller_id. Zero other spoken content. HALT.
-{{caller_first_name}} and {{caller_last_name}} and {{caller_email}} are ALL already non-empty (returning-caller record already has everything): same as above — skip straight through, re-fire book_intent silently.
+{{patient_status}} == "existing" — this is a returning patient who reached book_intent (e.g. booking an additional appointment): skip REASON, NAME, and EMAIL entirely. Say one brief filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="book_intent", called_number, caller_id, payload={"identity_intake_done": "true"}. Zero other spoken content. HALT.
+{{caller_first_name}} and {{caller_last_name}} and {{caller_email}} are ALL already non-empty (returning-caller record already has everything): same as above — skip straight through, re-fire book_intent with payload={"identity_intake_done": "true"}, silently.
 
 ## 1. REASON FOR CALLING
 Already resolved — the caller's own words this call (in the opening message or afterward) clearly describe heel pain, plantar fasciitis, plantar fascia, arch pain, or heel/foot pain matching this clinic's condition ({{caller_complaint}} may already hold this from Node 1's SYMPTOM capture): treat as confirmed, no question needed, go straight to step 2.
@@ -167,7 +180,7 @@ NAME CROSS-CHECK — once the email is confirmed (skip if the caller already spe
   A genuinely different name (3+ characters off, or no real resemblance) → ask which is correct.
 
 ## 4. HANDOFF
-Once REASON, NAME, and EMAIL are each resolved — including in the very same turn where the last of the three becomes resolved — speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="book_intent", called_number, caller_id, payload={"patient_name_raw": "[first] [last]", "caller_email": "[assembled address — omit this key entirely if email was declined]"}. This re-fires the same book_intent routing Node 1 already used to reach this node — the backend preserves every other booking-context field (timeframe, practitioner preference, location, etc.) from Node 1's original call via session context, so nothing else needs to be resent here. HALT.
+Once REASON, NAME, and EMAIL are each resolved — including in the very same turn where the last of the three becomes resolved — speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="book_intent", called_number, caller_id, payload={"patient_name_raw": "[first] [last]", "caller_email": "[assembled address — omit this key entirely if email was declined]", "identity_intake_done": "true"}. This re-fires the same book_intent routing Node 1 already used to reach this node — the backend preserves every other booking-context field (timeframe, practitioner preference, location, etc.) from Node 1's original call via session context, so nothing else needs to be resent here. identity_intake_done="true" is REQUIRED in this payload every time — without it, this node's own exit edge to Node 2 cannot fire (see the NOTE in the Edges section above). HALT.
 
 ## RETURNING FROM AN INFO DETOUR
 {{info_answered}} == "true" → say one brief acknowledgement ("Right, back to getting you booked in.") then, same turn, resume at whichever of REASON/NAME/EMAIL is still unresolved — or hand off immediately (step 4) if all three already are. Don't re-ask anything already resolved.
