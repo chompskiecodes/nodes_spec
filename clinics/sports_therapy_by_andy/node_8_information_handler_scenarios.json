@@ -1,29 +1,85 @@
 {
-  "_comment": "Tests booking-verb routing, YES handler guard, and that dry needling is only mentioned when explicitly asked — not volunteered.",
   "scenarios": [
     {
-      "name": "Booking intent during info session routes out silently",
+      "name": "FC1 — service comparison question routes to SERVICE COMPARISON, not the conditions-treated rule",
+      "tags": ["core", "migration-check"],
       "history": [
-        {"role": "user", "content": "Can sports massage help with my shoulder pain?"},
-        {"role": "assistant", "content": "Sports and remedial massage can definitely help with shoulder pain — it targets muscle tightness, reduces inflammation, and improves range of motion. Did you have any other questions?"},
-        {"role": "user", "content": "Let's book it"}
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "Should I see a chiro or a massage therapist for my back, which is better?"}
       ],
-      "expected_behavior": "PASS if agent calls universal_router intent='info_answered' with info_pivot_source='node_8' and implied_service set, producing zero spoken output. FAIL if agent says anything before the tool call."
+      "expected_behavior": "Fires the SERVICE COMPARISON rule (now correctly labeled 1c, no longer colliding with the 'what do you treat' rule): never recommends one over the other, says both can be helpful and the best fit depends on the caller's situation, recommends a quick chat with the team. Append CLOSING LINE. FAIL if it answers as though this were a 'what conditions do you treat' question, or if it recommends one service over another."
     },
     {
-      "name": "Dry needling not volunteered in general massage answer",
+      "name": "FC2 — 'what do you treat' question routes to EXECUTION SEQUENCE (the renumbered 1d rule), not SERVICE COMPARISON",
+      "tags": ["core", "migration-check"],
       "history": [
-        {"role": "user", "content": "What does Andy do in a massage session?"},
-        {"role": "assistant", "content": ""}
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "What conditions do you treat here?"}
       ],
-      "expected_behavior": "PASS if agent describes sports/remedial massage techniques without mentioning dry needling. FAIL if agent mentions dry needling when the caller did not ask about it."
+      "expected_behavior": "Fires the 'asks what conditions/ailments the clinic treats' rule (now labeled 1d) → EXECUTION SEQUENCE directly, does not list service_categories verbatim. FAIL if it fires SERVICE COMPARISON instead, or lists service_categories directly instead of going through EXECUTION SEQUENCE."
     },
     {
-      "name": "Dry needling mentioned only when explicitly asked",
+      "name": "DN1 — dry needling question answered before location intercept",
+      "tags": ["core", "migration-check"],
       "history": [
-        {"role": "user", "content": "Does Andy do dry needling?"}
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "Do you do dry needling?"}
       ],
-      "expected_behavior": "PASS if agent answers 'Yes, Andy does offer dry needling — it's something he incorporates into his massage sessions' and appends closing line. FAIL if agent says Andy does not offer dry needling or if it fails to answer."
+      "expected_behavior": "Answers directly: 'Yes, Andy does offer dry needling — it's something he incorporates into his massage sessions.' Append CLOSING LINE. FAIL if it routes to LOCATION INTERCEPT, asks a clarifying question first, or fails to answer directly."
+    },
+    {
+      "name": "PA1 — practitioner availability question stays silent/filler-only, no smart_voice_agent lookup",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "When is Andy available this week?"}
+      ],
+      "expected_behavior": "FILLER-ONLY TURN: speaks exactly one filler phrase from the TOOL-CALL FILLER set, then calls universal_router intent='info_answered' with payload including practitioner_preference='Andy Hoang' and info_pivot_source='node_8'. Does NOT call smart_voice_agent or attempt a find_next_available lookup. FAIL if it calls smart_voice_agent, or if it speaks more than the single filler phrase before the tool call."
+    },
+    {
+      "name": "PR1 — 60-minute price ask uses the fixed duration-keyword appointment_type_id",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "How much is the 60 minute massage?"}
+      ],
+      "expected_behavior": "TOOL + SPEAK turn: says 'Let me check that for you, one moment.' and calls smart_voice_agent intent='get_service_price' with appointment_type_id '1222086493015644829' and appointment_type 'Sports Massage Therapy (60 min)'. FAIL if it asks a clarifying question first, or uses any other appointment_type_id."
+    },
+    {
+      "name": "PR2 — 'all prices' ask issues one smart_voice_agent call per variant in the same turn",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "Can you tell me all your prices?"}
+      ],
+      "expected_behavior": "Recognizes the ALL VARIANTS trigger and calls smart_voice_agent once per variant (60/90/120 min appointment_type_ids) in the same STEP 2 response, each with intent='get_service_price'. FAIL if it asks the caller to pick one duration first, or only looks up a single variant."
+    },
+    {
+      "name": "FE1 — gap fee question answered from KB, not deflected to a billing callback",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "What's the gap fee with my private health cover?"}
+      ],
+      "expected_behavior": "The FINANCIAL ENQUIRY SCOPED EXCEPTION applies — this is a private-health-coverage question, so FINANCIAL ENQUIRY does NOT fire. Continues to FAST CLASSIFY / HICAPS handling instead of offering the billing callback. FAIL if it offers 'Our team handles billing directly — would you like me to get someone to call you back?' for this question."
+    },
+    {
+      "name": "ER1 — 'can you email Andy' routes to the new EMAIL REQUEST branch, not LEAVE MESSAGE trigger words",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "Can you email Andy for me about a special request?"}
+      ],
+      "expected_behavior": "Fires the SPEAK TO PRACTITIONER / EMAIL REQUEST signal's Email request branch: asks 'What would you like me to pass on?' and waits for reply (does not immediately call a tool this turn). FAIL if it silently calls leave_message with no message content yet, or if it treats this as an out-of-scope question."
+    },
+    {
+      "name": "MB1 — massage benefits question gets the scripted response, not info_pivot",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is Sports Therapy by Andy, how can I help?"},
+        {"role": "user", "content": "How does massage actually help with pain?"}
+      ],
+      "expected_behavior": "Speaks the exact scripted MASSAGE BENEFITS QUESTION response verbatim ('Sports and remedial massage can definitely help with pain. It helps reduce pain, relaxes tight muscles, reduces stress, improves movement, and helps you feel better overall. Would you like to book an appointment?') and waits for reply. Does NOT call universal_router intent='info_answered' for this turn. FAIL if it fires info_pivot/info_answered instead of the scripted line, or paraphrases instead of using the exact wording."
     }
   ]
 }
