@@ -1,32 +1,58 @@
 {
-  "_comment": "Tests booking-verb routing, YES HANDLER guard against spurious booking routing, and currency prefix in price answers for Bob Ward Physiotherapy Clinic.",
   "scenarios": [
     {
-      "name": "Explicit booking verb during info session routes silently to info_answered",
+      "name": "PR1 — unqualified price ask defaults to Standard Appointment",
+      "tags": ["core", "migration-check"],
       "history": [
-        {"role": "user", "content": "What does physiotherapy cover?"},
-        {"role": "assistant", "content": "Physiotherapy at The Bob Ward Physiotherapy Clinic addresses movement, pain, and physical function through hands-on assessment and treatment. Appointments are 60 minutes and are available for both new and returning patients. Did you have any other questions?"},
-        {"role": "user", "content": "Sounds good, I'd like to book an appointment"}
+        {"role": "assistant", "content": "This is The Bob Ward Physiotherapy Clinic, how can I help?"},
+        {"role": "user", "content": "How much does a physio appointment cost?"}
       ],
-      "expected_behavior": "PASS if node calls universal_router with intent='info_answered' and no spoken output this turn. FAIL if node says 'I'll book that for you', asks for a name/date, or continues with an informational answer."
+      "expected_behavior": "TOOL + SPEAK turn: says a cue phrase ('Let me check that for you, one moment.') and calls smart_voice_agent with appointment_type_id '1406607806622081880' and appointment_type 'Standard Appointment' (the PRIORITY RULE default), NOT a clarification question about which service/duration variant. FAIL if it asks the caller to specify a service first, or uses any other appointment_type_id."
     },
     {
-      "name": "YES HANDLER — bare affirmative after closing line does not route to booking",
+      "name": "PR2 — named-variant price ask overrides the priority default",
+      "tags": ["core", "migration-check"],
       "history": [
-        {"role": "user", "content": "Do you accept private health insurance?"},
-        {"role": "assistant", "content": "Yes, we accept private health insurance — any service that's covered under your policy is accepted here. Did you have any other questions?"},
-        {"role": "user", "content": "yeah"}
+        {"role": "assistant", "content": "This is The Bob Ward Physiotherapy Clinic, how can I help?"},
+        {"role": "user", "content": "How much is an initial consultation?"}
       ],
-      "expected_behavior": "PASS if node speaks 'Go ahead.' and waits. FAIL if node calls universal_router with any intent, routes to booking, or asks for appointment details."
+      "expected_behavior": "The caller named a specific variant ('initial consultation'), so the PRIORITY RULE default should NOT apply — match against {{service_ids}} for that specific service instead of defaulting to Standard Appointment. FAIL if it silently uses the Standard Appointment ID/name for this named-variant ask."
     },
     {
-      "name": "Price answer for Standard Appointment includes dollar currency prefix",
+      "name": "NH1 — bare completion phrase with no booking content -> info_answered tool-only",
+      "tags": ["core", "migration-check"],
       "history": [
-        {"role": "user", "content": "How much does a Standard Appointment cost?"},
-        {"role": "assistant", "content": "Let me check that for you, one moment."},
-        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": true, \"price\": \"120\", \"appointment_type\": \"Standard Appointment\"}"}
+        {"role": "assistant", "content": "We're at 123 Example St. Did you have any other questions?"},
+        {"role": "user", "content": "No, that's all, thanks."}
       ],
-      "expected_behavior": "PASS if the spoken answer includes '$120' or 'one hundred and twenty dollars'. FAIL if the price is spoken without a currency marker, e.g. 'The Standard Appointment is 120'."
+      "expected_behavior": "NO HANDLER fires: zero spoken output, call universal_router intent='info_answered', payload {info_pivot_source: 'node_8'} only. FAIL if it speaks any text, or if it routes to BOOKING SIGNAL HANDLER (there is no booking verb or time in this message)."
+    },
+    {
+      "name": "NH2 — completion phrase immediately followed by a booking verb -> BOOKING SIGNAL HANDLER, not NO HANDLER",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "We're at 123 Example St. Did you have any other questions?"},
+        {"role": "user", "content": "That's all, book me in for Monday."}
+      ],
+      "expected_behavior": "GUARD condition (2) fires — 'book me in' is a standalone booking verb plus 'Monday' is a specific day — so this must route to BOOKING SIGNAL HANDLER (filler phrase + universal_router intent='info_answered' with timeframe_raw captured), NOT the silent NO HANDLER path. FAIL if it silently calls info_answered with no timeframe_raw captured, or stays silent when a filler phrase is required."
+    },
+    {
+      "name": "FE1 — gap fee / EPC / NDIS question answered from KB, not deflected to callback",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is The Bob Ward Physiotherapy Clinic, how can I help?"},
+        {"role": "user", "content": "What's the gap fee if I have an EPC referral from my GP?"}
+      ],
+      "expected_behavior": "The FINANCIAL ENQUIRY SCOPED EXCEPTION applies — gap fee / EPC questions are answered from the knowledge base / FAST CLASSIFY, NOT deflected to the 'Our team handles billing directly — would you like me to get someone to call you back?' callback offer. FAIL if it offers a callback for this question instead of attempting to answer it."
+    },
+    {
+      "name": "FE2 — genuine billing/invoice dispute still gets the callback offer",
+      "tags": ["core", "migration-check"],
+      "history": [
+        {"role": "assistant", "content": "This is The Bob Ward Physiotherapy Clinic, how can I help?"},
+        {"role": "user", "content": "I think I was charged twice for my last appointment, can someone look into that?"}
+      ],
+      "expected_behavior": "This is a genuine billing dispute (not a gap-fee/EPC/NDIS/private-health coverage question), so the SCOPED EXCEPTION does NOT apply — FINANCIAL ENQUIRY should still fire and offer 'Our team handles billing directly — would you like me to get someone to call you back?'. FAIL if it tries to answer this from the knowledge base instead of offering a callback."
     }
   ]
 }
