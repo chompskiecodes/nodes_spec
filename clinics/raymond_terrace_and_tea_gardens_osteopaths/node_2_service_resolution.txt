@@ -117,7 +117,7 @@ If true:
 - Skip Scan J.
 - FIRST: IF {{implied_service}} is set -> match to CATEGORY TABLE -> enter that category's branch normally:
   - If that category requires a variant question AND {{patient_status}} is not already set: ask the variant question (if {{booking_for}} == "other": ask VARIANT_OTHER; otherwise: ask VARIANT_SELF). HALT. Wait for reply; on the next turn call confirm_service with info_pivot_source="node_8".
-  - If {{patient_status}} is already set OR the category has no variant question: skip ONLY the VARIANT_SELF/VARIANT_OTHER gate question. If the matched category is STANDARD and location is not yet known, ask "Are you coming to Raymond Terrace or Tea Gardens?" first. Spoken only. HALT. If the matched category is STANDARD, location resolves to Raymond Terrace, and {{patient_status}} == "existing": ask the returning-patient duration question ("Would you like a 30 or 40 minute appointment?"). HALT. Wait for reply; on the next turn call confirm_service with info_pivot_source="node_8". Otherwise (new patient, STANDARD at Tea Gardens with location known, or a category with no returning-patient question -- DVA_TYPE, EPC_TYPE, WORKCOVER_TYPE, HOME_CARE_TYPE): call universal_router intent="confirm_service" with info_pivot_source="node_8". Speak one filler phrase from the TOOL-CALL FILLER set, then the tool call, per CONFIRM_SERVICE FILLER RULE. HALT.
+  - If {{patient_status}} is already set OR the category has no variant question: skip ONLY the VARIANT_SELF/VARIANT_OTHER gate question. If the matched category is STANDARD and location is not yet known, ask "Are you coming to Raymond Terrace or Tea Gardens?" first. Spoken only. HALT. If the matched category is STANDARD, location resolves to Raymond Terrace, and {{patient_status}} == "existing": ask the returning-patient duration question ("Would you like a 30 or 40 minute appointment?"). HALT. Wait for reply; on the next turn call confirm_service with info_pivot_source="node_8". Otherwise (new patient, STANDARD at Tea Gardens with location known, or a category with no returning-patient question -- DVA_TYPE, EPC_TYPE, HOME_CARE_TYPE): call universal_router intent="confirm_service" with info_pivot_source="node_8". Speak one filler phrase from the TOOL-CALL FILLER set, then the tool call, per CONFIRM_SERVICE FILLER RULE. HALT.
 - THEN: IF {{appointment_type_id}} != "none" -> proceed to CATEGORY RESOLUTION -> call universal_router intent="confirm_service" with info_pivot_source="node_8". Speak one filler phrase from the TOOL-CALL FILLER set, then the tool call, per CONFIRM_SERVICE FILLER RULE. HALT.
 - IF neither -> ask VARIANT_SELF. HALT.
 If {{info_answered}} is not "true" -> proceed to Scan J normally.
@@ -152,7 +152,7 @@ TURN 2 — NEW OR RETURNING: Ask "Have you been to Raymond Terrace and Tea Garde
 TURN 3 — DURATION (returning + Raymond Terrace only): Ask "Would you like a 30 or 40 minute appointment?" Spoken only. ZERO tool calls. HALT.
 ROUTING: Call confirm_service only after all applicable turns are complete.
 
-DVA_TYPE, EPC_TYPE, WORKCOVER_TYPE, HOME_CARE_TYPE do not require a new/existing gate — route after location is known (and EPC item number if Raymond Terrace).
+DVA_TYPE, EPC_TYPE, HOME_CARE_TYPE do not require a new/existing gate — route after location is known (and EPC item number if Raymond Terrace).
 
 The ABSENCE of patient history does NOT imply new patient. NEVER assume new and route directly. ALWAYS ask.
 
@@ -174,11 +174,22 @@ Caller says → Type:
 - "standard" / "regular" / "osteopathy" / "osteopath" / generic booking / no billing term stated → STANDARD
 - "DVA" / "veteran" / "Department of Veterans' Affairs" / "veterans affairs" → DVA_TYPE
 - "EPC" / "Enhanced Primary Care" / "care plan" / "Medicare care plan" / "81350" / "GP management plan" → EPC_TYPE
-- "Work Cover" / "WorkCover" / "workers comp" / "workers compensation" / "CTP" / "compulsory third party" / "motor vehicle accident" → WORKCOVER_TYPE
 - "home care" / "home visit" / "home" / "visiting" / "domiciliary" / "come to me" → HOME_CARE_TYPE
 
 No match → ask GUIDANCE_QUESTION. HALT.
 Caller unsure → ask VARIANT_SELF. HALT.
+
+---
+
+## KB NON-BOOKABLE SERVICES (evaluate in STEP 1 before CATEGORY TABLE match — never deny these)
+Offered by the clinic but not bookable through this agent:
+- Work Cover / WorkCover / workers comp / workers compensation / CTP / compulsory third party / motor vehicle accident
+
+Action:
+  Say: "Yes, we do see Work Cover and CTP patients — that's arranged directly with the clinic rather than online. Would you like someone from the team to call you back?" HALT. Wait for reply.
+  YES (any affirmative): If {{patient_name_raw}} is set, TOOL-ONLY — call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "{{patient_name_raw}}", "callback_reason": "Work Cover / CTP booking" }. Call universal_router intent="wrap_up". HALT.
+  If {{patient_name_raw}} is empty: say "And can I get your name?" HALT. On name reply: TOOL-ONLY — call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<reply>", "callback_reason": "Work Cover / CTP booking" }. Call universal_router intent="wrap_up". HALT.
+  NO: acknowledge briefly, then ask GUIDANCE_QUESTION or VARIANT_SELF as appropriate. HALT.
 
 ---
 
@@ -298,28 +309,6 @@ EPC (Enhanced Primary Care) appointments — caller has a GP referral.
 
 ---
 
-### WORKCOVER_TYPE
-
-Work Cover or CTP appointments.
-
-1. LOCATION GATE: If location not yet known, ask "Are you coming to Raymond Terrace or Tea Gardens?" HALT.
-
-2. RAYMOND TERRACE:
-   working_type = "Work Cover - CTP"
-   working_id = "415451978840152417"
-   working_business_id = "412451910923065987"
-   working_business_name = "Raymond Terrace"
-   Call universal_router intent="confirm_service". Speak one filler phrase from the TOOL-CALL FILLER set, then the tool call, per CONFIRM_SERVICE FILLER RULE.
-
-3. TEA GARDENS:
-   working_type = "Workcover - CTP Tea Gardens"
-   working_id = "438605402557389137"
-   working_business_id = "412584500640357006"
-   working_business_name = "Tea Gardens"
-   Call universal_router intent="confirm_service". Speak one filler phrase from the TOOL-CALL FILLER set, then the tool call, per CONFIRM_SERVICE FILLER RULE.
-
----
-
 ### HOME_CARE_TYPE
 
 Tea Gardens home care visits only. No location question needed — Tea Gardens only.
@@ -367,7 +356,7 @@ J. Scan J -- fires ONLY when ALL FOUR conditions are true:
    "new" -> use service_hint or implied_service to identify category.
      If category found and it has a standard initial type: map to that category's initial type. Call universal_router intent="confirm_service". Speak one filler phrase from the TOOL-CALL FILLER set, then the tool call, per CONFIRM_SERVICE FILLER RULE.
      If category cannot be determined: proceed to STEP 1 normally.
-   "existing" -> proceed to CATEGORY RESOLUTION. Skip variant question for the identified category. Explicitly: (a) do NOT ask VARIANT_SELF or VARIANT_OTHER, (b) use patient_status="existing" in the confirm_service payload -- treat caller as a returning patient. For STANDARD: if location resolves to Raymond Terrace, still ask the returning-patient duration question ("Would you like a 30 or 40 minute appointment?") before routing -- only the VARIANT_SELF/VARIANT_OTHER gate question is skipped. If location resolves to Tea Gardens, STANDARD has no further returning-patient question -- route directly once location is known. DVA_TYPE, EPC_TYPE, WORKCOVER_TYPE, and HOME_CARE_TYPE do not use a VARIANT_SELF/VARIANT_OTHER gate at all -- this skip has no effect on them; resolve location (and, for EPC_TYPE at Raymond Terrace, the item-number question) as normal. Never call confirm_service directly from Scan J without first asking a pending returning-patient question when one exists.
+   "existing" -> proceed to CATEGORY RESOLUTION. Skip variant question for the identified category. Explicitly: (a) do NOT ask VARIANT_SELF or VARIANT_OTHER, (b) use patient_status="existing" in the confirm_service payload -- treat caller as a returning patient. For STANDARD: if location resolves to Raymond Terrace, still ask the returning-patient duration question ("Would you like a 30 or 40 minute appointment?") before routing -- only the VARIANT_SELF/VARIANT_OTHER gate question is skipped. If location resolves to Tea Gardens, STANDARD has no further returning-patient question -- route directly once location is known. DVA_TYPE, EPC_TYPE, and HOME_CARE_TYPE do not use a VARIANT_SELF/VARIANT_OTHER gate at all -- this skip has no effect on them; resolve location (and, for EPC_TYPE at Raymond Terrace, the item-number question) as normal. Never call confirm_service directly from Scan J without first asking a pending returning-patient question when one exists.
 K. If agent's last spoken turn was VARIANT_SELF or VARIANT_OTHER AND location is already known AND caller responded:
    Map directly to confirm_service — do NOT pass through CATEGORY RESOLUTION.
    Affirmative ("yes", "yeah", "been before", "I have", "returning", "yep") AND Raymond Terrace:
@@ -396,6 +385,8 @@ IF Scan K triggered -> execute Scan K logic. HALT.
 IF SCAN C resolved a branch selection -> map to working_id for active branch. Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="confirm_service", per CONFIRM_SERVICE FILLER RULE.
 
 IF practitioner named without service -> PRACTITIONER-ONLY PATH.
+
+IF caller's message matches KB NON-BOOKABLE SERVICES -> follow KB NON-BOOKABLE SERVICES action. HALT.
 
 IF caller's message matches a category in the CATEGORY TABLE -> go to that branch's step 1 (its mandatory first question). Do NOT skip ahead to step 2/3 or call confirm_service directly -- matching a category is not the same as having answered its gate question.
 
