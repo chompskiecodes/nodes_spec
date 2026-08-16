@@ -171,6 +171,72 @@
         {"role": "user", "content": "What about Friday the 10th?"}
       ],
       "expected_behavior": "PASS if: agent answers from memory that Friday the 10th has nothing either and re-offers the 8th, 9th, and 11th, making NO tool call (Friday the 10th is within the already-searched window and was not offered). FAIL if: agent calls smart_voice_agent for Friday the 10th, or claims Friday the 10th is available."
+    },
+    {
+      "name": "BOTH APPOINTMENTS — 'both of them' triggers BOTH APPOINTMENTS FLOW, must ask own time first, no tool call",
+      "tags": ["core", "batch-reschedule"],
+      "dvs": {"linked_appointment_id": "PETER_APPT_1", "linked_appointment_label": "Peter", "reschedule_mode": "true"},
+      "history": [
+        {"role": "user", "content": "Actually, they need to be an hour later, both of them."}
+      ],
+      "expected_behavior": "PASS if: agent recognises this as BOTH APPOINTMENTS (linked_appointment_id is set + 'both of them') and asks 'What time would you like your appointment moved to?' with NO tool call this turn, and does NOT attempt to calculate 'an hour later' itself. FAIL if: agent calls any tool this turn, asks who the other appointment belongs to (Peter is already known via linked_appointment_label), or states a computed time without asking the caller."
+    },
+    {
+      "name": "BOTH APPOINTMENTS — relative time guard fires on second (linked) appointment's time",
+      "tags": ["batch-reschedule"],
+      "dvs": {"linked_appointment_id": "PETER_APPT_1", "linked_appointment_label": "Peter", "reschedule_mode": "true"},
+      "history": [
+        {"role": "user", "content": "Actually, they need to be an hour later, both of them."},
+        {"role": "assistant", "content": "What time would you like your appointment moved to?"},
+        {"role": "user", "content": "10 AM."},
+        {"role": "assistant", "content": "And what time should Peter's appointment move to?"},
+        {"role": "user", "content": "Same as before, just an hour on."}
+      ],
+      "expected_behavior": "PASS if: agent asks 'What time exactly would you like that to be?' with NO tool call — does not compute 'an hour on' from any prior time itself. FAIL if: agent silently calculates a time and proceeds to call smart_voice_agent without asking for an exact answer."
+    },
+    {
+      "name": "BOTH APPOINTMENTS — both exact times known, must call reschedule with additional_targets",
+      "tags": ["batch-reschedule"],
+      "dvs": {"linked_appointment_id": "PETER_APPT_1", "linked_appointment_label": "Peter", "reschedule_mode": "true",
+              "appointment_id": "MY_APPT_1", "session_id": "sess-123"},
+      "history": [
+        {"role": "user", "content": "Actually, they need to be an hour later, both of them."},
+        {"role": "assistant", "content": "What time would you like your appointment moved to?"},
+        {"role": "user", "content": "10 AM on the 14th."},
+        {"role": "assistant", "content": "And what time should Peter's appointment move to?"},
+        {"role": "user", "content": "10:30 AM on the 14th."}
+      ],
+      "expected_behavior": "PASS if: agent says 'Let me lock those in.' AND calls smart_voice_agent intent='reschedule' with new_date/new_time for the caller's own appointment (2026-08-14 / 10:00) AND additional_targets containing one entry with appointment_id='PETER_APPT_1', new_date='2026-08-14', new_time='10:30', label='Peter', in the same turn. FAIL if: agent omits the spoken phrase, omits additional_targets, calls intent='book' instead of 'reschedule', or splits this into two separate tool calls."
+    },
+    {
+      "name": "BOTH APPOINTMENTS success — verbatim message covering both, wrap_up same turn",
+      "tags": ["batch-reschedule"],
+      "dvs": {"linked_appointment_id": "PETER_APPT_1", "linked_appointment_label": "Peter", "reschedule_mode": "true"},
+      "history": [
+        {"role": "assistant", "content": "Let me lock those in."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": true, \"message\": \"Perfect! I've rescheduled your appointment to Friday, August 14th at 10 AM and Peter's to Friday, August 14th at 10:30 AM.\", \"rescheduled_appointments\": [{\"label\": \"primary\"}, {\"label\": \"Peter\"}]}"}
+      ],
+      "expected_behavior": "PASS if: agent speaks the message verbatim AND calls universal_router intent='wrap_up' in the same turn with zero additional spoken output. FAIL if: agent paraphrases, asks a follow-up question, or omits the wrap_up call."
+    },
+    {
+      "name": "BOTH APPOINTMENTS failure — both kept at original time, message explains, waits for new times",
+      "tags": ["batch-reschedule"],
+      "dvs": {"linked_appointment_id": "PETER_APPT_1", "linked_appointment_label": "Peter", "reschedule_mode": "true"},
+      "history": [
+        {"role": "assistant", "content": "Let me lock those in."},
+        {"role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"reschedule_target_unavailable\", \"message\": \"That time wasn't available, so I've kept it as it was. I do have Friday, August 14th at 11 AM available instead. Would you like to try a different time?\"}"}
+      ],
+      "expected_behavior": "PASS if: agent speaks the message verbatim and waits for the caller's response — does NOT call universal_router intent='wrap_up' immediately and does NOT claim either appointment moved. FAIL if: agent calls wrap_up without waiting, or tells the caller both appointments were successfully moved."
+    },
+    {
+      "name": "NOT both appointments — linked_appointment_id empty, ordinary single reschedule request must not trigger the flow",
+      "tags": ["batch-reschedule"],
+      "dvs": {"linked_appointment_id": "", "linked_appointment_label": "", "reschedule_mode": "true",
+              "appointment_type_id": "type_789", "timeframe_raw": ""},
+      "history": [
+        {"role": "user", "content": "Can we push my appointment back an hour?"}
+      ],
+      "expected_behavior": "PASS if: agent does NOT enter BOTH APPOINTMENTS FLOW (linked_appointment_id is empty) — proceeds through the ordinary RESCHEDULE BYPASS path instead, asking 'What day and time works for you?' with no tool call. FAIL if: agent asks about a second appointment, references Peter or any other party, or otherwise behaves as if a linked appointment exists."
     }
   ]
 }

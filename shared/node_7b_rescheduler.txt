@@ -44,6 +44,8 @@ BOOKING PARTY: [booking_party] = {{patient_name_raw}} if ({{booking_for}} == "ot
 
 CATEGORY DEFINITION: [category] = the appointment type category name — top-level only (not the variant). Use {{appointment_type}} DV if non-empty; otherwise extract from the most recent successful smart_voice_agent cancel response in conversation history.
 
+BOTH APPOINTMENTS (check FIRST, before RESCHEDULE BYPASS below): {{linked_appointment_id}} is non-empty AND the caller's most recent message asks to move more than one appointment — "both", "both of them", "and {{linked_appointment_label}}'s too", "and {{linked_appointment_label}}'s as well", "the other one too" → go to BOTH APPOINTMENTS FLOW below. {{linked_appointment_label}} is who the other appointment is for — it is already known, never ask whose appointment it is.
+
 RESCHEDULE BYPASS (DV check only — never infer from conversation): If {{reschedule_mode}} == "true" AND {{appointment_type_id}} is non-empty AND {{appointment_type_id}} != "none" → all appointment context is already set in DVs ({{appointment_type}}, {{appointment_type_id}}, {{practitioner_id}}, {{practitioner_preference}}, {{appointment_id}}).
   TARGET TIME KNOWN: If {{timeframe_raw}} is ALSO non-empty — the caller already stated their desired new day/time in the same breath as confirming the cancellation, before this node was entered — do NOT ask "What day and time works for [booking_party]?". Instead treat {{timeframe_raw}} exactly as if it were the caller's answer to that question: extract [date] and [time] from it using the same extraction rules as AVAILABILITY STEP, then proceed directly into the AVAILABILITY STEP INTENT RULE and make the matching tool call this turn.
   TARGET TIME UNKNOWN: If {{timeframe_raw}} is empty → proceed directly to AVAILABILITY STEP. Do NOT ask any confirmation question. Do NOT call any tool on this entry turn — ask the availability question and HALT.
@@ -134,6 +136,22 @@ After the availability response — evaluate in order, stop at first match:
 STORAGE (MANDATORY — fires immediately upon receiving ANY smart_voice_agent availability/find_next_available/asap_slots response, before evaluating branches A–D below, even when branch A fires immediately because the time is already known. Silent, zero spoken output. Skipping this step is a protocol violation):
 Store from resolved_context if present: business_id→stored_business_id, business_name→stored_business_name. Overrides prior values.
 If resolved_context.business_id is absent, store from practitioners[0]: business_id→stored_business_id, business_name→stored_business_name.
+
+## BOTH APPOINTMENTS FLOW
+Ask, once: "What time would you like your appointment moved to?" Wait for an exact day and time.
+RELATIVE TIME GUARD: If the caller states a relative offset instead of an exact time ("an hour later", "an hour after the other one", "same as before but later") → ask "What time exactly would you like that to be?" Wait for an exact answer. Always collect an exact clock time for each appointment — never calculate an offset yourself.
+Once the caller's own new day and time is known, ask, once: "And what time should {{linked_appointment_label}}'s appointment move to?" Apply the same RELATIVE TIME GUARD. Wait.
+Once BOTH exact new times are known: say "Let me lock those in." Call smart_voice_agent:
+  intent="reschedule", called_number, caller_id, conversation_id, session_id={{session_id}},
+  new_date=[caller's own new date, YYYY-MM-DD], new_time=[caller's own new time, HH:MM 24h],
+  additional_targets=[{ "appointment_id": {{linked_appointment_id}}, "new_date": [{{linked_appointment_label}}'s new date, YYYY-MM-DD], "new_time": [{{linked_appointment_label}}'s new time, HH:MM 24h], "label": {{linked_appointment_label}} }].
+  Include appointment_id={{appointment_id}} only if {{appointment_id}} is non-empty.
+Skipping the spoken "Let me lock those in." before this call is a failure.
+
+After it returns — evaluate in order, stop at first match:
+  A. success=true → speak the message from the response verbatim — it already confirms both appointments. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. Zero additional spoken output. HALT.
+  B. success=false AND error is "reschedule_batch_failed" OR "reschedule_target_unavailable" OR "reschedule_batch_failed_rollback_incomplete" → speak the message from the response verbatim — it already explains both appointments were kept at their original time. Wait for the caller. Caller gives new times for both → repeat this flow from the top with the new times. Caller declines to try again → call universal_router intent="wrap_up", called_number, caller_id.
+  C. success=false (any other error) → say "I'm having trouble moving both of those together right now — I can change your appointment now, and have the team call about {{linked_appointment_label}}'s separately. Would that work?" Wait. Caller agrees → proceed to RESCHEDULE BYPASS above for the caller's own appointment only, using the day and time already collected in this flow. Caller declines → call universal_router intent="wrap_up", called_number, caller_id.
 
 ## BOOKING STEP
 Book immediately — do NOT ask "Would you like to book that?" or seek any confirmation. Say "Let me lock that in." Call smart_voice_agent:
@@ -242,3 +260,18 @@ Caller said "Thursday afternoon" and multi-day response has Thursday and Friday 
 
 {{reschedule_mode}} == "true", {{real_cancellation_finalized}} != "true" — caller has been silent for several turns of availability search with no time found, then says "never mind, I'll call back another time"
 → Signal 0.5 match (Rule: caller declining to pick a new time after failed availability search is the exact scenario this guard exists for). REAL-CANCEL GUARD fires → speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="reschedule_cancelled", payload { "reschedule_mode": "", "cancellation_completed": "none" }. This is the fix for the case where a caller abandons a reschedule after availability search fails to find a time — the old appointment must still be finalized as cancelled via Node 7, and Node 7's POLICY WARNING block reads the cancellation policy before it completes.
+
+{{linked_appointment_id}} = "PETER_APPT_1", {{linked_appointment_label}} = "Peter" — node just entered, caller: "Actually, they need to be an hour later, both of them."
+→ BOTH APPOINTMENTS match ("both of them" + {{linked_appointment_id}} non-empty). Go to BOTH APPOINTMENTS FLOW. "an hour later" is a relative offset, not an exact time — do NOT calculate it. Ask "What time would you like your appointment moved to?" Wait for an exact time.
+
+BOTH APPOINTMENTS FLOW in progress, caller's own new time already collected — agent just asked "And what time should Peter's appointment move to?" — Caller: "Same as before, just an hour on."
+→ RELATIVE TIME GUARD fires (relative offset, not an exact time). Ask "What time exactly would you like that to be?" Wait. Do not compute "an hour on" from any prior time yourself.
+
+BOTH APPOINTMENTS FLOW, both exact new times collected (caller: 10 AM; Peter: 10:30 AM) — smart_voice_agent reschedule returns success=true with message "Perfect! I've rescheduled your appointment to ... and Peter's to ...":
+→ Branch A. Speak the message verbatim. In the same turn call universal_router intent="wrap_up". HALT.
+
+BOTH APPOINTMENTS FLOW, smart_voice_agent reschedule returns success=false, error="reschedule_target_unavailable", message already explains both appointments were kept unchanged:
+→ Branch B. Speak the message verbatim. Wait. Caller gives two new times → repeat BOTH APPOINTMENTS FLOW from the top. Caller declines → call universal_router intent="wrap_up".
+
+{{linked_appointment_id}} is empty (no other identity booked anything this call) — caller: "Can we push my appointment back an hour?"
+→ BOTH APPOINTMENTS does NOT match ({{linked_appointment_id}} is empty) — this is an ordinary single-appointment reschedule. Proceed to RESCHEDULE BYPASS / standard ENTRY path as normal.

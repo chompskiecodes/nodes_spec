@@ -100,13 +100,31 @@ def strip_node_header(content: str) -> str:
 
 
 def load_node3() -> Optional[str]:
+    """
+    Node 3 is `Override: Disabled` — in production it ALWAYS runs combined with
+    nodes/shared/system_prompt.txt (the agent-level prompt), never on its own.
+    An earlier version of this scaffold sent only the stripped Additional Prompt,
+    omitting the shared framework — see the identical fix + rationale in
+    angus_osteopathic_sport_injuries_clinics/test_node3_practitioner_pref_repro.py's
+    load_node3(), where sending Additional Prompt alone produced a completely
+    off-script response matching no branch in Node 3's own text.
+    """
     path = CLINIC_DIR / "node_3_availability_handler.txt"
     if not path.exists():
         print(f"✗ Node 3 file not found: {path}")
         return None
     content = path.read_text(encoding="utf-8")
-    prompt = strip_node_header(content)
-    print(f"✓ Loaded Node 3 for '{CLINIC}' ({len(prompt):,} chars)")
+    additional_prompt = strip_node_header(content)
+
+    sys_path = CLINIC_DIR.parent.parent / "shared" / "system_prompt.txt"
+    if not sys_path.exists():
+        print(f"✗ Shared system prompt not found: {sys_path}")
+        return None
+    system_prompt = sys_path.read_text(encoding="utf-8").strip()
+
+    prompt = system_prompt + "\n\n" + additional_prompt
+    print(f"✓ Loaded Node 3 for '{CLINIC}' — system_prompt ({len(system_prompt):,} chars) "
+          f"+ additional_prompt ({len(additional_prompt):,} chars) = {len(prompt):,} chars total")
     return prompt
 
 
@@ -320,17 +338,24 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "success_condition": (
             "During availability search for Physiotherapy, caller says 'switch to exercise physiology'. "
-            "SERVICE PIVOT ESCAPE fires: agent routes away (calls universal_router) silently. "
-            "EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call "
-            "is the CORRECT escape-route behavior — count this as a PASS. "
-            "FAIL only if: agent asks about exercise physiology availability, asks the band question for it, "
-            "or calls smart_router for exercise physiology."
+            "SERVICE PIVOT ESCAPE fires: agent routes away by calling universal_router. "
+            "Per the shared TOOL-CALL FILLER rule, the agent's ENTIRE spoken content for this turn "
+            "must be either nothing, or exactly one short filler phrase ('One moment.' / 'Just a sec.' / "
+            "'Let me check that.') — and the universal_router call MUST be in the SAME response as that "
+            "spoken content, not a bare filler with no tool call. "
+            "EVALUATOR NOTE: PASS requires a universal_router tool call in this response — either with "
+            "empty spoken content, or with a single filler phrase and nothing more. "
+            "FAIL if: agent asks about exercise physiology availability, asks the band question for it, "
+            "calls smart_router for exercise physiology, OR speaks (even just a filler phrase) WITHOUT "
+            "a universal_router tool call in the same response."
         ),
         "success_examples": [
             _ok("[silent — calls universal_router to route away. No spoken output = CORRECT]"),
+            _ok("One moment. [calls universal_router to route away in the SAME response]"),
         ],
         "failure_examples": [_fail("Sure, let me check exercise physiology"), _fail("[calls smart_router]"),
-                              _fail("Do you prefer the morning or afternoon for exercise physiology")],
+                              _fail("Do you prefer the morning or afternoon for exercise physiology"),
+                              _fail("Just a sec. [no tool call in this response]")],
     })
 
     tests.append({
@@ -342,37 +367,48 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "success_condition": (
             "Caller asks to change practitioner. CONSTRAINT CHANGE ESCAPE fires. "
-            "Agent routes away silently (calls universal_router, zero spoken output). "
-            "EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call "
-            "is the CORRECT escape-route behavior — count this as a PASS. "
-            "FAIL only if: agent asks 'Which practitioner would you like?' or calls smart_router."
+            "Agent routes away by calling universal_router. Per the shared TOOL-CALL FILLER rule, "
+            "spoken content this turn must be either nothing or exactly one short filler phrase — and "
+            "the universal_router call MUST be in the SAME response as that spoken content. "
+            "EVALUATOR NOTE: PASS requires a universal_router tool call in this response — either with "
+            "empty spoken content, or with a single filler phrase and nothing more. "
+            "FAIL if: agent asks 'Which practitioner would you like?', calls smart_router, OR speaks "
+            "(even just a filler phrase) WITHOUT a universal_router tool call in the same response."
         ),
         "success_examples": [
             _ok("[silent — calls universal_router to route away. No spoken output = CORRECT]"),
+            _ok("Just a sec. [calls universal_router to route away in the SAME response]"),
         ],
         "failure_examples": [_fail("Of course, which practitioner"), _fail("[calls smart_router]"),
-                              _fail("Which one would you like to see")],
+                              _fail("Which one would you like to see"),
+                              _fail("Just a sec. [no tool call in this response]")],
     })
 
     tests.append({
-        "name": f"{p} E6 — Time change: universal_router change_time",
+        "name": f"{p} E6 — Time change, no value named: agent asks which month",
         "chat_history": eh() + [
             _fixture_msg(single_both, 14),
             _m("agent", _band_q, 17),
             _m("user",  "Actually, can we look at a completely different month?", 20),
         ],
         "success_condition": (
-            "Caller asks to look at a different time period. CONSTRAINT CHANGE ESCAPE fires. "
-            "Agent routes away silently (calls universal_router, zero spoken output). "
-            "EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call "
-            "is the CORRECT escape-route behavior — count this as a PASS. "
-            "FAIL only if: agent asks 'What month?' or asks band/day questions, or calls smart_router."
+            "Caller asks for 'a completely different month' WITHOUT naming which month. "
+            "Per node_3's ESCAPE ROUTES, CONSTRAINT CHANGE fires only when the caller swaps a "
+            "constraint with a NAMED replacement value ('Thursday instead of Wednesday', 'actually "
+            "make it the afternoon') — an unnamed, open-ended 'a different month' is not a named "
+            "value, so CONSTRAINT CHANGE ESCAPE correctly does NOT fire here. "
+            "EVALUATOR NOTE: the CORRECT behavior is a clarifying question asking which month the "
+            "caller wants (no tool call this turn) — this is a PASS, not a fail. "
+            "FAIL if: agent asks band/day questions unrelated to the month change, calls smart_router, "
+            "or calls universal_router before a specific month has been named."
         ),
         "success_examples": [
-            _ok("[silent — calls universal_router to route away. No spoken output = CORRECT]"),
+            _ok("No problem, which month would you like to look at?"),
+            _ok("Sure — which month did you have in mind?"),
         ],
-        "failure_examples": [_fail("Sure, what month"), _fail("[calls smart_router]"),
-                              _fail("Do you prefer the morning or afternoon")],
+        "failure_examples": [_fail("[calls smart_router]"),
+                              _fail("Do you prefer the morning or afternoon"),
+                              _fail("[calls universal_router before a month is named]")],
     })
 
     tests.append({
@@ -384,16 +420,21 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "success_condition": (
             "Caller names a different location (O'Herns Road). CONSTRAINT CHANGE ESCAPE fires. "
-            "Agent routes away silently (calls universal_router, zero spoken output). "
-            "EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call "
-            "is the CORRECT escape-route behavior — count this as a PASS. "
-            "FAIL only if: agent asks about O'Herns Road availability or calls smart_router."
+            "Agent routes away by calling universal_router. Per the shared TOOL-CALL FILLER rule, "
+            "spoken content this turn must be either nothing or exactly one short filler phrase — and "
+            "the universal_router call MUST be in the SAME response as that spoken content. "
+            "EVALUATOR NOTE: PASS requires a universal_router tool call in this response — either with "
+            "empty spoken content, or with a single filler phrase and nothing more. "
+            "FAIL if: agent asks about O'Herns Road availability, calls smart_router, OR speaks (even "
+            "just a filler/acknowledgment phrase) WITHOUT a universal_router tool call in the same response."
         ),
         "success_examples": [
             _ok("[silent — calls universal_router to route away. No spoken output = CORRECT]"),
+            _ok("One moment. [calls universal_router to route away in the SAME response]"),
         ],
         "failure_examples": [_fail("Of course, let me check O'Herns Road"), _fail("[calls smart_router]"),
-                              _fail("Do you prefer the morning")],
+                              _fail("Do you prefer the morning"),
+                              _fail("No problem, just checking. [no tool call in this response]")],
     })
 
     tests.append({
@@ -405,17 +446,21 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "success_condition": (
             "Caller requests multiple constraint changes (practitioner AND day). "
-            "CONSTRAINT CHANGE ESCAPE fires. "
-            "Agent routes away silently (calls universal_router, zero spoken output). "
-            "EVALUATOR NOTE: an EMPTY agent response combined with a universal_router tool call "
-            "is the CORRECT escape-route behavior — count this as a PASS. "
-            "FAIL only if: agent asks 'Which practitioner?' or 'Which day?' or calls smart_router."
+            "CONSTRAINT CHANGE ESCAPE fires. Agent routes away by calling universal_router. "
+            "Per the shared TOOL-CALL FILLER rule, spoken content this turn must be either nothing "
+            "or exactly one short filler phrase — and the universal_router call MUST be in the SAME "
+            "response as that spoken content. "
+            "EVALUATOR NOTE: PASS requires a universal_router tool call in this response — either with "
+            "empty spoken content, or with a single filler phrase and nothing more. "
+            "FAIL if: agent asks 'Which practitioner?' or 'Which day?', calls smart_router, OR speaks "
+            "(even just a filler phrase) WITHOUT a universal_router tool call in the same response."
         ),
         "success_examples": [
             _ok("[silent — calls universal_router to route away. No spoken output = CORRECT]"),
+            _ok("Just a sec. [calls universal_router to route away in the SAME response]"),
         ],
         "failure_examples": [_fail("Sure, which practitioner"), _fail("[calls smart_router]"),
-                              _fail("spoken output")],
+                              _fail("Just a sec. [no tool call in this response]")],
     })
 
     # ── D — Tool dispatch tests ───────────────────────────────────────────────
@@ -746,23 +791,30 @@ def generate_tests(fixtures: dict) -> list:
             _m("user",  "9:00 AM works for me.", 26),
         ],
         "success_condition": (
-            "Agent delivers CONFIRMATION spoken line in the format: "
-            "'Perfect, [time] [day_name] the [ordinal] with [practitioner] at [location].' "
-            "Example: 'Perfect, 9:00 AM Wednesday the 8th with Dithu Beeram "
-            "at South Morang.' "
-            "Then calls universal_router in the SAME turn with intent='confirm_time'. "
-            "Payload MUST include appointment_date='2026-04-08' and "
-            "appointment_time in 24h format (09:00 NOT 9:00 AM). "
-            "Spoken line precedes the tool call."
+            "PASS if: (1) agent speaks exactly one filler phrase from the TOOL-CALL FILLER set "
+            "('One moment.' / 'Just a sec.' / 'Let me check that.') with nothing else AND "
+            "(2) calls universal_router intent='confirm_time' with appointment_date='2026-04-08' "
+            "and appointment_time='09:00' (24h format, NOT '9:00 AM') plus practitioner_id and "
+            "business_id, in the SAME response turn, per CONFIRMATION's filler-only rule. "
+            "FAIL if agent speaks the appointment date, time, practitioner name, or location "
+            "(e.g. 'Perfect, 9:00 AM Wednesday the 8th with Dithu Beeram at South Morang'), "
+            "says 'great', 'I'll book you in', 'you're booked', 'you're all set', or "
+            "'anything else?', speaks the filler without calling the tool, calls the tool "
+            "without speaking, splits the phrase and tool call across two turns, or calls "
+            "smart_voice_agent/smart_router instead of universal_router."
         ),
         "success_examples": [
-            _ok("Perfect, 9:00 AM Wednesday the 8th with Dithu Beeram "
-                "at South Morang. [calls universal_router confirm_time "
+            _ok("One moment. [calls universal_router confirm_time "
+                "appointment_date=2026-04-08 appointment_time=09:00]"),
+            _ok("Just a sec. [calls universal_router confirm_time "
                 "appointment_date=2026-04-08 appointment_time=09:00]"),
         ],
         "failure_examples": [
+            _fail("Perfect, 9:00 AM Wednesday the 8th with Dithu Beeram at South Morang. "
+                  "[calls universal_router confirm_time]"),
             _fail("[no spoken output before tool call]"),
             _fail("[no tool call]"),
+            _fail("[calls smart_router instead of universal_router]"),
         ],
     })
 
@@ -790,6 +842,7 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "failure_examples": [
             _fail("[no tool call]"),
+            _fail("Just a sec. [no tool call in this response]"),
             _fail("When would you like to come in?"),
             _fail("[calls universal_router]"),
         ],
@@ -862,20 +915,31 @@ def generate_tests(fixtures: dict) -> list:
         ],
         "success_condition": (
             "Agent offered 5:00 PM Tuesday the 14th. Caller confirms ('yes, that works perfectly'). "
-            "CONFIRMATION fires: agent says 'Perfect, 5:00 PM Tuesday the 14th with Dithu Beeram "
-            "at South Morang.' (or close variant) AND calls universal_router "
-            "with intent='confirm_time'. Payload must include appointment_date='2026-04-14' and "
-            "appointment_time in 24h format (17:00). "
-            "Spoken confirmation must precede the tool call. "
-            "Agent does NOT call smart_router. Does NOT ask another question."
+            "PASS if: (1) agent speaks exactly one filler phrase from the TOOL-CALL FILLER set "
+            "('One moment.' / 'Just a sec.' / 'Let me check that.') with nothing else AND "
+            "(2) calls universal_router intent='confirm_time' with appointment_date='2026-04-14' "
+            "and appointment_time='17:00' (24h format, NOT '5:00 PM') plus practitioner_id and "
+            "business_id, in the SAME response turn, per CONFIRMATION's filler-only rule. "
+            "FAIL if agent speaks the appointment date, time, practitioner name, or location "
+            "(e.g. 'Perfect, 5:00 PM Tuesday the 14th with Dithu Beeram at South Morang'), "
+            "says 'great', 'I'll book you in', 'you're booked', 'you're all set', or "
+            "'anything else?', speaks the filler without calling the tool, calls the tool "
+            "without speaking, splits the phrase and tool call across two turns, or calls "
+            "smart_voice_agent/smart_router instead of universal_router. "
+            "Agent does NOT ask another question."
         ),
         "success_examples": [
-            _ok("Perfect, 5:00 PM Tuesday the 14th with Dithu Beeram at South Morang. "
-                "[calls universal_router confirm_time appointment_date=2026-04-14 appointment_time=17:00]"),
+            _ok("One moment. [calls universal_router confirm_time "
+                "appointment_date=2026-04-14 appointment_time=17:00]"),
+            _ok("Just a sec. [calls universal_router confirm_time "
+                "appointment_date=2026-04-14 appointment_time=17:00]"),
         ],
         "failure_examples": [
+            _fail("Perfect, 5:00 PM Tuesday the 14th with Dithu Beeram at South Morang. "
+                  "[calls universal_router confirm_time appointment_date=2026-04-14 appointment_time=17:00]"),
             _fail("[calls smart_router]"),
             _fail("[no universal_router call]"),
+            _fail("[calls universal_router with no spoken confirmation line — empty response before the tool call]"),
             _fail("Which day would you prefer?"),
         ],
     })

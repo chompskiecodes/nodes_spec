@@ -98,13 +98,30 @@ def strip_node_header(content: str) -> str:
 
 
 def load_node2() -> Optional[str]:
+    """
+    Node 2 is `Override: Disabled` — in production it ALWAYS runs combined with
+    nodes/shared/system_prompt.txt (the agent-level prompt), never on its own.
+    See the identical fix + rationale in northern_physio/test_node3_scaffold.py's
+    load_node3() and angus_osteopathic_sport_injuries_clinics's
+    test_node3_practitioner_pref_repro.py — sending Additional Prompt alone
+    produces an unrepresentative, off-script scaffold.
+    """
     path = CLINIC_DIR / "node_2_service_resolution.txt"
     if not path.exists():
         print(f"✗ Node 2 file not found: {path}")
         return None
     content = path.read_text(encoding="utf-8")
-    prompt = strip_node_header(content)
-    print(f"✓ Loaded Node 2 for '{CLINIC}' ({len(prompt):,} chars)")
+    additional_prompt = strip_node_header(content)
+
+    sys_path = CLINIC_DIR.parent.parent / "shared" / "system_prompt.txt"
+    if not sys_path.exists():
+        print(f"✗ Shared system prompt not found: {sys_path}")
+        return None
+    system_prompt = sys_path.read_text(encoding="utf-8").strip()
+
+    prompt = system_prompt + "\n\n" + additional_prompt
+    print(f"✓ Loaded Node 2 for '{CLINIC}' — system_prompt ({len(system_prompt):,} chars) "
+          f"+ additional_prompt ({len(additional_prompt):,} chars) = {len(prompt):,} chars total")
     return prompt
 
 
