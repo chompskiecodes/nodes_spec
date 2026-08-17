@@ -210,6 +210,22 @@ EMAIL CORRECTION → CONTACT DETAIL UPDATE: broadened to any contact detail (pho
 
 ---
 
+## Node 2 template system
+
+Node 2 (Service Resolution) is generated, not hand-written — same pattern as Node 3/Node 8. Every
+clinic maps to one of four flow families in `nodes/node2_templates/` (`node_2_a_category.txt` —
+CATEGORY TABLE-driven, most of the fleet; `_b_gate_first.txt` — patient-status gate hoisted above
+service resolution; `_c_visit_type.txt` — linear visit-type/billing-type flow, no CATEGORY TABLE;
+`_e_passthrough.txt` — single appointment type, no service resolution at all), plus a branch
+composer (`nodes/node2_templates/branches/`) for the variable-length per-category booking logic.
+`scripts/node2_configs.py` holds each clinic's family + slot overrides + patches; regenerate via
+`scripts/generate_node2.py` (wired into `fast_patch.py`, same as Node 1/3/8). `EXCLUDED_CLINICS`
+(`mri_first`) is hand-maintained. See `.claude/rules/node2-template-builder-plan.md` for the full
+design/migration history and `nodes/node2_templates/branches/BRANCHES.md` for branch-archetype
+detail.
+
+---
+
 ## Node 8 handler architecture
 
 Node 8 always routes `info_answered` when the caller is done — no DV-conditional branching.

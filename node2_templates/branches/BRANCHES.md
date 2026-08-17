@@ -918,3 +918,160 @@ later.
    `.claude/rules/node2-template-builder-plan.md` §6.1 for the `## RULES` section, showing
    up independently in `## CATEGORY BRANCHES` too. Not fixed (kept as the template
    default per "most common wording"); flagged for a deliberate decision.
+
+---
+
+## 9. MIGRATION LANDED — actual state as of 2026-08-16
+
+Sections 1–8 above are the *design study*, written before any branch was wired into
+`scripts/node2_configs.py`. This section records what the generator actually does today.
+Where the two disagree, this section wins.
+
+### What shipped
+
+**40 of 84 branches now render from an archetype template.** Every migrated branch was
+verified by byte-exact round-trip — extract slots from the branch's own text, re-render
+through the template, require character-for-character equality with the original — so the
+migration provably changed **zero characters** of any clinic's prompt. Proved twice over:
+per-branch at extraction time, and fleet-wide afterwards by generating every clinic's
+full body from the pre-migration and post-migration configs and diffing (0 clinics
+differed).
+
+| Archetype | Branches |
+|---|---|
+| GATE+DURATION | 16 |
+| DIRECT | 9 |
+| SUBTYPE+GATE | 9 |
+| GATE | 4 |
+| DIRECT+WORKING | 2 |
+| **RAW (bootstrap, unmigrated)** | **44** |
+
+`DIRECT+WORKING` was added in a follow-up pass: the same "no gate, one appointment type"
+shape as `DIRECT`, but resolved via `working_type =`/`working_id =` variables and a bare
+`Call universal_router intent="confirm_service".` instead of an inline JSON payload. Only
+2 of the 10 branches originally filed under "no gate; resolution shape off-template" fit
+it (`cascade_womens_health TELEHEALTH`, `totally_well CRANIOSACRAL`) — the rest
+(`raymond_terrace`'s location-keyed branches, `ryde_health`'s duration-lookup and
+group/private-nested branches, `totally_well PACKAGES`' 3-way sub-type,
+`intuitive_health_and_wellness EFT_MATRIX`'s redirect-then-route flow) have genuinely
+different multi-outcome shapes a single new archetype can't honestly cover — confirmed by
+the same round-trip requirement rejecting all of them, not by inspection alone.
+
+The remaining 44 across 14 clinics are itemised by reason below — none is an unexplained
+leftover.
+
+### Templates were generalised, not the prompts
+
+§5's 46/76 byte-exact figure was measured against a throwaway extractor with its own
+templates. Against the committed templates the true starting figure was 22/84. Closing
+the gap meant adding slots for variance the templates had baked in as fixed text — the
+fidelity-first direction, i.e. the template bends to the corpus, never the corpus to the
+template:
+
+- `_gate.txt`, `_gate_duration.txt`: `. Halt.` → `<<GATE_HALT_TAIL>>` (clinics append
+  reinforcement like `ZERO TOOL CALLS THIS TURN. HALT. Do not enter step 2 or 3 until…`,
+  which is behavioural text, not decoration); the fixed CONCERN-GUIDED line →
+  `<<GATE_CONCERN_LINE>>` (parenthetical variants); new `<<POST_OUTCOMES_BLOCK>>` for
+  branches carrying a sub-step after outcome B (e.g. totally_well's package path).
+- `_direct.txt`: the fixed `Call universal_router: …` prefix → `<<CALL_LEAD>>` ending
+  before `universal_router:` (absorbs both `Call ` and `Speak one filler phrase…, then
+  call `, and the Call/call case difference), plus `<<CALL_TAIL>>` for `. HALT.` vs
+  `. Per CONFIRM_SERVICE FILLER RULE. HALT.`, and `<<INTRO_BLOCK>>` covering the gap after
+  the heading (some branches have no blank line there).
+
+The gate line's `If {{booking_for}} == "other": ask VARIANT_OTHER ("…"). Otherwise: ask
+VARIANT_SELF ("…")` skeleton, the `working_type`/`working_id` outcome shape, and the
+`confirm_service` payload skeleton all stay template-owned — those are the invariants a
+fleet-wide contract change would otherwise have to touch in 84 places.
+
+### Matching is round-trip-verified, and archetype fit is separately enforced
+
+Two templates are permissive enough to match branches they don't describe: SUBTYPE+GATE is
+four blobs separated by blank lines, and DIRECT's blobs will bury a whole gate question
+plus one of its two outcomes. Both round-trip byte-exact while filing the branch under the
+wrong archetype — RAW with a misleading label, which is worse than RAW. So acceptance also
+requires: SUBTYPE+GATE must contain the `#### ` detection/paths structure; DIRECT must have
+no VARIANT_SELF/VARIANT_OTHER and exactly one `confirm_service` call. `PRICING_FOOTER` is
+constrained to `(?:Pricing.*)?` — all 50 real footers open with "Pricing", and without the
+constraint the trailing blob absorbed the tail of the last outcome block in 20 branches.
+
+### Follow-up pass: 10 more branches word-normalized onto Style A (2026-08-16, same day)
+
+The 24-branch "gate present but not Style A" bucket was the one deliberately left as a
+content decision, not a mechanical task (see "Open decision" above). Given explicit
+go-ahead, 10 of those 24 were migrated by hand — reworded onto the canonical
+`If {{booking_for}} == "other": ask VARIANT_OTHER (...). Otherwise: ask VARIANT_SELF
+(...).` wrapper, with every other word (the question text, any reinforcement/HALT-tail
+sentence, the outcome labels, `working_type`/`working_id`, and the `confirm_service` call)
+copied verbatim from the branch's own current text:
+
+- `balrothery_physio` PHYSIOTHERAPY, `healing_hands_hand_therapy` NDIS_HAND + HAND_THERAPY,
+  `village_remedies` ACUPUNCTURE, `yandina_podiatry` FOOT_PAIN + HEEL_PAIN + SKIN_TOENAIL —
+  the numbered-`Gate (mandatory...)`/`(SELF)`/`(OTHER)` wrapper folded onto Style A.
+- `totally_well` PREGNANCY — same wrapper fold; the underlying two-way question is a
+  sub-type choice ("Pregnancy Massage or Pregnancy Lymphatic Drainage"), not a
+  new/existing-patient gate — GATE's skeleton is content-agnostic (it's just "ask a
+  self/other-variant two-way question, route to one of two IDs"), so this is a legitimate
+  fit, not a misclassification.
+- `plantar_fascia_clinic` PODIATRY, `taylor_square_osteo_chiro` GENERAL_BOOKING — these
+  two were curly-quote bugs, not wording drift (`"other"`/`"First Appointment"` etc. typed
+  with smart quotes throughout the branch, matching the already-known 8-clinic curly-quote
+  defect class). Straightened first, which alone brought `taylor_square_osteo_chiro`'s
+  gate wrapper to a byte-exact match; `plantar_fascia_clinic`'s question text was inlined
+  from the same clinic's own `slots['VARIANT_SELF']`/`['VARIANT_OTHER']` values (used
+  elsewhere in the same file's `## TEMPLATES` section) — not invented text, the exact
+  words the file already commits to about itself.
+
+**Deliberately excluded from this batch, and why:**
+- `totally_well` RELAXATION_MASSAGE — its two duration outcomes share ONE trailing call
+  line under a single "3. Duration resolved:" heading, not two separately-numbered
+  outcomes each with their own call line. Forcing it into GATE's two-outcome/two-call-line
+  shape would restructure the instruction, not just reword the wrapper.
+- `cascade_womens_health` HYDROTHERAPY, `intuitive_health_and_wellness` MASSAGE/BREATHWORK/
+  REIKI, `meraki_holistic_health` LYMPHATIC_DRAINAGE, `ryde_health`'s three branches, and
+  `speeding_health`'s three branches — each has real per-outcome structure GATE can't
+  express without inventing content (condition-list lines before an outcome, nested
+  sub-disambiguation, inline-payload-only outcomes with no `working_type`/`working_id`
+  pair, pre-gate keyword-bypass jump targets to differently-labelled outcomes). Forcing
+  these through would have meant writing new instruction text, not normalizing existing
+  wording — out of scope for a drift-alignment pass.
+
+**Verification (not byte-exact by design — this pass intentionally changes wording):**
+every one of the 10 was hand-reviewed side by side (before/after printed in full, not just
+diffed) before being written. After writing: `generated_body()` compared per-clinic against
+this session's own pre-pass snapshot confirmed **exactly the 7 touched clinics changed and
+no others**; the loss gate's 12 `LOST` lines are precisely the old `(SELF)/(OTHER)`-style
+wrapper sentences these 10 branches used to contain (nothing else); the quote-glyph gate
+stayed at **0 straight→curly** (38 curly→straight, up from 21, both curly-quote branches'
+full text now clean). Fleet dry-run: 28/29, zero WARN/ERROR/unresolved tokens.
+
+Archetype tally after this pass: GATE 14 (was 4), GATE+DURATION 16, SUBTYPE+GATE 9,
+DIRECT 9, DIRECT+WORKING 2, **RAW 34** (was 44) — 50 of 84 branches now template-driven.
+
+### The 34 still on RAW, by reason
+
+| # | Reason | Where |
+|---|---|---|
+| 14 | **Gate present but not Style A, and not migrated this pass.** Each has real per-outcome structure GATE can't express without inventing content (condition-list lines before an outcome, nested sub-disambiguation, inline-payload-only outcomes with no `working_type`/`working_id` pair, pre-gate keyword-bypass jump targets to differently-labelled outcomes, or a shared trailing call line across outcomes instead of one each). Forcing these through would mean writing new instruction text, not normalizing existing wording. | cascade, ihw ×3, meraki, ryde ×3, speeding ×3, totally_well |
+| 8 | **No gate; resolution shape off-template.** Each is a genuinely distinct multi-outcome shape (location-keyed, duration-lookup, nested group/private, 3-way sub-type, redirect-then-route) — not further consolidatable without a bespoke archetype per shape. | ihw, raymond ×4, ryde ×2, totally_well |
+| 5 | **Style A gate, outcome blocks off-template.** Gate matches; the outcomes have a shape the GATE/GATE+DURATION bodies don't model. | ihw ×2, totally_well ×3 |
+| 4 | **§6: recommended for `patches`.** Unchanged from the design study. | ihw HOLISTIC_EXPAND + CHIROPRACTIC, totally_well LYMPHATIC_DISAMBIGUATION, ryde OSTEOPATHY |
+| 3 | **Whole-flow blocks, not category branches** (the Family D fold). Correctly RAW permanently. | luminance_health, sports_therapy_by_andy, sydney_spine |
+
+### Two generator defects found and fixed while migrating
+
+1. **CRLF doubling.** 60 of 84 branch texts carry literal `\r\n` from however they were
+   extracted into `node2_configs.py`. The writer opens in text mode, so writing them back
+   would have produced `\r\r\n` throughout the CATEGORY BRANCHES section of 15 clinics on
+   the very first real (non-dry-run) write. Both existing gates whitespace-normalise every
+   line, so neither could see it. Fixed by `_normalise_newlines()` in
+   `scripts/generate_node2.py`, applied in `compose_branches()` and once more over the
+   assembled body.
+2. **Curly quotes introduced into live prompts.** The Family A and E templates hardcoded
+   the URGENCY QUALIFIER line with smart quotes — including `timeframe_raw=”today”`, a
+   curly quote inside a value, which is the same defect class already reported against 8
+   clinics' JSON payload examples. `canon()` folds curly onto straight, so the loss and
+   added gates were both blind to it. Straightened in both templates; a third gate
+   (`n2_quotes.py`) now reports every quote-glyph flip in either direction. Result:
+   **0 straight→curly, 21 curly→straight** — the generator now only ever removes smart
+   quotes, never adds them.
