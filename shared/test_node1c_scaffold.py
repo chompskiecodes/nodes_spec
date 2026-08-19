@@ -214,7 +214,36 @@ _DVS = {
     # Flags this node's own text references
     "uni_router_intent":         "",
     "wrap_routing_flag":         "",
+    # name_known_instruction: see NAME_KNOWN_INSTRUCTION_SKIP / presubstitute_name_known_
+    # instruction below — kept here too (harmless either way) but the test run does NOT rely
+    # on this dict alone to land it in the prompt.
+    "name_known_instruction":    "",
 }
+
+# T4/T5 both need {{name_known_instruction}} to resolve to the "already known" branch
+# (caller_first_name/caller_last_name above are pre-set to exercise exactly that case).
+# Must be byte-identical to _node1c_name_known_instruction()'s "known" branch in
+# tools/universal_router_webhook.py — kept as a literal copy rather than importing across
+# the tools/ <-> nodes/ package boundary.
+NAME_KNOWN_INSTRUCTION_SKIP = (
+    "the caller's name is already known — skip the name question entirely. "
+    "Immediately ask: 'And what's your date of birth?' Stop and wait for the "
+    "caller's answer."
+)
+
+
+def presubstitute_name_known_instruction(prompt: str) -> str:
+    """Bake {{name_known_instruction}} into literal text before agent creation.
+
+    test_node6a_phone_skip_scaffold.py's own investigation (same phone_known-style DV
+    pattern) found EL's run-tests simulation does not reliably substitute a
+    dynamic_variable_placeholders value into prompt TEXT the way a real live call does —
+    presubstitution is the proven-reliable technique in this repo for exactly this shape of
+    test (a DV whose value is itself a MANDATORY instruction sentence, not a tool-call
+    parameter). _DVS above still carries the same value for realism/defense-in-depth, but
+    this presubstitution is what the T4/T5 result should actually be trusted against.
+    """
+    return prompt.replace("{{name_known_instruction}}", NAME_KNOWN_INSTRUCTION_SKIP)
 
 
 # ── Test helpers ──────────────────────────────────────────────────────────────
@@ -668,6 +697,7 @@ def main() -> None:
     if args.show_prompt:
         prompt = load_node1c_prompt(candidate=args.candidate)
         if prompt:
+            prompt = presubstitute_name_known_instruction(prompt)
             print("\n" + "=" * 60 + " COMBINED PROMPT " + "=" * 60)
             print(prompt)
         sys.exit(0)
@@ -684,6 +714,12 @@ def main() -> None:
     prompt = load_node1c_prompt(candidate=args.candidate)
     if not prompt:
         sys.exit(1)
+    _had_token = "{{name_known_instruction}}" in prompt
+    prompt = presubstitute_name_known_instruction(prompt)
+    if _had_token:
+        print(f"✓ {{{{name_known_instruction}}}} presubstituted with the 'already known' branch "
+              f"({len(NAME_KNOWN_INSTRUCTION_SKIP)} chars) — see test_node6a_phone_skip_scaffold.py "
+              f"for why presubstitution, not dynamic_variable_placeholders alone, is used here.")
 
     all_tests = generate_tests()
     previously_passed = set() if args.reset else load_passed_tests()
