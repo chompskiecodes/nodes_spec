@@ -5,12 +5,25 @@ Override: Disabled
 
 NOTE: Forked from nodes/shared/node_6a_name_collection_self.txt on 2026-08-11 for Plantar
 Fascia Clinic ONLY — see .claude/plans/sparkling-seeking-unicorn.md. The ONLY change from the
-shared version is the success-message addendum in step 4 EXECUTE (partner/support-person
-encouragement + prep-video-SMS + booking-confirmation-SMS mention, spoken after the booking
-success message). This clinic mostly reaches this step via node_1b's early NAME/EMAIL
-collection, so the KNOWN FAST-PATH above fires far more often than on other clinics — this
-node's own collection logic is otherwise unchanged and still runs normally if node_1b's fields
-weren't fully resolved (e.g. the caller declined email at node_1b but has since offered one).
+shared version is in step 4 EXECUTE's success handling: after the booking success message,
+this clinic asks a real support-person question (wait for reply) instead of stating a passive
+addendum, then mentions the prep-video text/email, then wraps up — see the SUPPORT PERSON
+FOLLOW-UP sub-case at the top of ## AFTER BOOKING SUCCEEDS below (updated 2026-08-18, was a
+single fire-and-forget statement before). This clinic mostly reaches this step via node_1b's
+early NAME/EMAIL collection, so the KNOWN FAST-PATH above fires far more often than on other
+clinics — this node's own collection logic is otherwise unchanged and still runs normally if
+node_1b's fields weren't fully resolved (e.g. the caller declined email at node_1b but has
+since offered one).
+Both the bring-someone question and the prep-video promise only apply to a genuine Initial
+Consultation booking — EXECUTE now branches on {{appointment_type_id}} (updated 2026-08-18;
+was unconditional before, which would have told a returning patient booking a Subsequent
+Consultation "before your first session..." and promised a video/email that the backend never
+actually sends for a non-initial appointment_type — see tools/sms_manager.py's
+is_initial_appointment gate and tools/booking_stages/side_effects.py's _resolve_is_initial).
+This clinic only has two appointment types (Initial Consultation = 2010559925616385733,
+Subsequent Consultation = 2010560230416457414 — confirmed live against appointment_types),
+so a direct ID check on the same {{appointment_type_id}} already used in the booking payload
+is exhaustive for this clinic — see EXECUTE below.
 Everything else in this file is identical to the shared version — keep it that way; if the
 shared node_6a is ever edited for a structural reason, re-apply that same change here too.
 
@@ -81,7 +94,9 @@ Once name, phone, and email are each resolved — including in the very same tur
 session_id is required by this tool — always include it, never omit even if empty.
 Include when non-empty: practitioner_id={{practitioner_id}}, business_id={{business_id}}, business_name={{business_name}}, practitioner.
 
-Result success=true: speak the `message` field verbatim, then add — as a separate short addendum in the SAME turn, never blended into the message text — this clinic-specific tail: "Feel free to bring a partner or support person along if that's helpful. You'll get a text with some short videos to watch before your appointment, plus a booking confirmation text as well." Then, same turn, call universal_router intent="wrap_up" — don't wait for the caller to say anything first.
+Result success=true: speak the `message` field verbatim, then check {{appointment_type_id}}:
+  {{appointment_type_id}}=="2010559925616385733" (Initial Consultation) → in the SAME turn, as a separate sentence, never blended into the message text, ask this clinic-specific question: "Before your first session it is very helpful if you can bring someone with you to help your recovery. Do you have anyone you could bring?" Wait for reply. Do not call any tool this turn.
+  Any other value (a Subsequent Consultation booking) → in the SAME turn, call universal_router intent="wrap_up" — don't wait for the caller to say anything further.
 Result success=false/error: say "I'm having trouble finalizing that booking."
 
 ## BOOKING PARTY
@@ -99,8 +114,9 @@ Caller wants to update details already on file ("update my email on the account"
 Caller wants to change a booking detail while collection is still in progress ("actually can we do 3pm instead", "different practitioner") → say "Sure, let me update that." and call universal_router with called_number and caller_id only — no need to restate the new detail, the downstream node re-reads it from the conversation. intent="change_time" / "change_practitioner" / "change_location" / "change_service" as applicable.
 
 ## AFTER BOOKING SUCCEEDS
+SUPPORT PERSON FOLLOW-UP (evaluate first, only when your own immediately preceding message asked "Do you have anyone you could bring?"): acknowledge based on the reply — an affirmative ("yes", "yeah", "I could bring my partner", any name given) → say "Great, one more thing before we wrap up the call." A negative ("no", "not really", "I don't think so") → say "That's ok, one more thing before we wrap up the call." Either way, in the SAME turn, continue: "You will receive a text message and email that will give you access to our pre appointment preparation videos and information. We highly recommend you watch these to get the most out your first session." Then, same turn, call universal_router intent="wrap_up" — don't wait for the caller to say anything further.
 A replacement mention ("wrong time", "can we do Wednesday instead", "not Mark") needs a cancel-and-rebook, not a plain constraint change: say "I'm sorry about that — let me cancel that booking and rebook you straight away." and call universal_router intent="cancel_intent", payload {reschedule_mode: true}. (A plain "cancel it" with no replacement mentioned is an ordinary cancellation — the system prompt's CANCEL ESCAPE already covers that correctly.)
-Anything else the caller says once the booking has already succeeded, that isn't covered by a block above → universal_router intent="wrap_up". There's nothing left for this node to do once booking is complete.
+Anything else the caller says once the booking has already succeeded, that isn't covered by a block above (including the SUPPORT PERSON FOLLOW-UP above) → universal_router intent="wrap_up". There's nothing left for this node to do once booking is complete.
 
 ## RETURNING FROM AN INFO DETOUR
 Check the DV, not the caller's wording: {{info_answered}} == "true" → say "So, back to the booking — [appointment_time_spoken] on [appointment_day] with [practitioner]." then, same turn, resume at whichever of name/phone/email is still unresolved — or execute immediately if all three already are. Don't re-ask anything already resolved.

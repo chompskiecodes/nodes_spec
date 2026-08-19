@@ -106,22 +106,45 @@ Edges:
     Target: node_01kbf348egf6dbt86h6b6ej77d
     Additional data: {
       "forward_condition": {
-            "label": "1b→9. Wrap Up",
+            "label": "1b→9. Wrap Up / Callback Arranged",
             "type": "expression",
             "expression": {
-                  "type": "eq_operator",
-                  "left": {
-                        "type": "dynamic_variable",
-                        "name": "uni_router_intent"
-                  },
-                  "right": {
-                        "type": "string_literal",
-                        "value": "wrap_up"
-                  }
+                  "type": "or_operator",
+                  "children": [
+                        {
+                              "type": "eq_operator",
+                              "left": {"type": "dynamic_variable", "name": "uni_router_intent"},
+                              "right": {"type": "string_literal", "value": "wrap_up"}
+                        },
+                        {
+                              "type": "eq_operator",
+                              "left": {"type": "dynamic_variable", "name": "uni_router_intent"},
+                              "right": {"type": "string_literal", "value": "callback_arranged"}
+                        }
+                  ]
             }
       },
       "backward_condition": null
 }
+
+  NOTE (2026-08-18, REASON FOR CALLING fit-check — fixed same day after a fast_patch failure):
+  this node's REASON step calls universal_router intent="callback_request" directly when the
+  caller is unsure or doesn't match the clinic's condition, rather than proceeding to
+  NAME/EMAIL collection. That intent's server-side response sets
+  uni_router_intent="callback_arranged" (see tools/universal_router_webhook.py's
+  WRAP_INTENT_TO_FLAG mapping), NOT "wrap_up" — so this edge's condition was widened to an
+  or_operator covering both values, rather than adding a second edge object to the same
+  target. A first attempt added a separate edge_1b_pf_to_n9_callback_arranged edge
+  (node_1b_pf -> node_9, same pair as this edge) and fast_patch.py's live PATCH for this
+  clinic failed as a result — confirmed via direct GET against the live agent
+  (agent_8901kzqbtvxceg2bj0qq87ag2jjr) that ElevenLabs never has two edges sharing the same
+  (source, target) pair anywhere in this or any other fleet agent (0 duplicate pairs found
+  across the live agent's 50 edges) — the platform's workflow schema is one edge per ordered
+  node pair; a second condition on the same pair must be OR'd into the existing edge's
+  forward_condition instead (see docs/elevenlabs.md "LLM conditions nesting in edges" for the
+  or_operator/children JSON shape — same pattern, just eq_operator children here, no LLM
+  child). See .claude/rules/plantar_fascia_one_edge_per_node_pair_bug.md for the full
+  incident writeup.
 
 ================================================================================
 
@@ -138,11 +161,11 @@ Additional Prompt:
 
 ## 1. REASON FOR CALLING
 Already resolved — the caller's own words this call (in the opening message or afterward) clearly describe heel pain, plantar fasciitis, plantar fascia, arch pain, or heel/foot pain matching this clinic's condition ({{caller_complaint}} may already hold this from Node 1's SYMPTOM capture): treat as confirmed, no question needed, go straight to step 2.
-Not yet resolved and the caller's reason is unclear or unstated: ask "Just to check — is this for heel or plantar fascia pain?" Wait.
-  Confirms plantar fasciitis/heel pain ("yes", "that's right", "heel pain", "plantar fasciitis") → resolved, go to step 2.
-  Describes something clearly unrelated (a different body part, a different condition, unrelated to the foot/heel) → say "Just so you know, we specialise exclusively in plantar fasciitis and heel pain — we don't treat other conditions here. Would you still like to go ahead and book, or would a referral elsewhere suit better?" Wait.
-    Still wants to book → resolved, go to step 2, no further mention.
-    Wants a referral / doesn't want to proceed → speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="wrap_up". HALT.
+Not yet resolved: say "Before we book you in, can I first make sure we're the right fit and that we can help you? Could you tell me a little about your foot or heel pain?" Wait.
+  Reply clearly confirms plantar fasciitis/heel pain (an official diagnosis, or heel pain worst on first steps or after sitting, "yes", "that's right", "heel pain", "plantar fasciitis") → resolved, go to step 2.
+  Reply is unsure, vague, or doesn't clearly answer the question → ask "Have you received an official diagnosis of plantar fasciitis, or do you experience heel pain that is at its worst when taking your first steps in the morning or when standing up after sitting?" Wait.
+    Now confirms plantar fasciitis/matching heel pain → resolved, go to step 2.
+    Still unsure, or describes something clearly unrelated (a different body part, a different condition) → say "Because we only work with people who have plantar fasciitis, Ben will personally call you to discuss your symptoms and make sure we're the right fit for you. We'll pass on this call and he'll be in contact within 24 hours." Then, same turn, call universal_router intent="callback_request", called_number, caller_id, payload={"callback_reason": "Symptom fit unclear at booking intake — Ben to call back.", "caller_name": "{{caller_first_name}}"} (omit caller_name if {{caller_first_name}} is empty). HALT — do not proceed to step 2 (NAME).
 
 ## 2. NAME
 Already known — {{caller_first_name}} and {{caller_last_name}} both have values: use them silently (no readback), go to step 3.

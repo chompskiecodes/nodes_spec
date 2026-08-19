@@ -699,10 +699,163 @@
           "content": "In two weeks."
         }
       ],
-      "expected_behavior": "PASS if the agent says 'Checking that now, one moment.' and calls smart_voice_agent with intent='find_next_available', start_date=today+14 (YYYY-MM-DD), max_days=14, detail='summary'. FAIL if it calls intent='availability' with a single date (e.g. date='2026-08-15'), or calls find_next_available without detail='summary', or speaks availability dates without calling a tool.",
+      "expected_behavior": "PASS if the agent says 'Checking that now, one moment.' and calls smart_voice_agent with intent='find_next_available', date_ref_range_weeks=2, detail='summary'. Never compute a calendar date itself — no start_date, no literal date. max_days is not required for this branch. FAIL if it calls intent='availability' with a single date (e.g. date='2026-08-15'), or computes and sends a start_date/date instead of date_ref_range_weeks, or calls find_next_available without detail='summary', or speaks availability dates without calling a tool.",
       "tags": [
         "core",
         "relative-range"
+      ]
+    },
+    {
+      "name": "WL-1 — WAITLIST REQUEST: name known via DV, no date discussed yet",
+      "history": [
+        {
+          "role": "user",
+          "content": "Actually, can you just put me on the waitlist for a physio appointment?"
+        }
+      ],
+      "expected_behavior": "Assume {{caller_first_name}}='Priya' and {{caller_last_name}}='Nair' are already populated, and no day has been discussed this call (confirmed_day is unset). PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set and calls universal_router intent='waitlist_add' with payload patient_name='Priya Nair', appointment_type_id/appointment_type from context, and NO requested_date field (since no day was discussed) — all in the SAME turn. FAIL if the agent asks for the caller's name (it's already known), asks a clarifying question before calling the tool, includes a requested_date the caller never stated, or routes to universal_router intent='info_pivot' instead.",
+      "tags": [
+        "waitlist",
+        "core"
+      ]
+    },
+    {
+      "name": "WL-2 — WAITLIST REQUEST: name unknown, must ask before calling the tool",
+      "history": [
+        {
+          "role": "user",
+          "content": "Is there a wait list I can get on in case something opens up sooner?"
+        }
+      ],
+      "expected_behavior": "Assume {{caller_first_name}}, {{caller_last_name}}, and {{patient_name_raw}} are all empty (name never given this call). PASS if the agent's entire turn is exactly 'What's your name for the waitlist?' with no tool call. FAIL if the agent calls waitlist_add without a name, invents a name, or routes elsewhere (e.g. info_pivot) instead of asking.",
+      "tags": [
+        "waitlist"
+      ]
+    },
+    {
+      "name": "WL-3 — WAITLIST REQUEST: after a specific day came back empty, requested_date is populated from confirmed_day",
+      "history": [
+        {
+          "role": "user",
+          "content": "Do you have anything this Tuesday?"
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"found\": false, \"waitlist_eligible\": \"true\"}",
+          "metadata": {
+            "appointment_date": "2026-06-16"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "I don't have anything available on Tuesday."
+        },
+        {
+          "role": "user",
+          "content": "Okay, can you put me on the waitlist for that? It's Maria Silva, by the way."
+        }
+      ],
+      "expected_behavior": "confirmed_day for this call is 2026-06-16 (the Tuesday just searched). PASS if the agent speaks one filler phrase and calls universal_router intent='waitlist_add' with payload patient_name='Maria Silva' and requested_date='2026-06-16' in the SAME turn — the day the caller was just told was unavailable. FAIL if requested_date is omitted, is a different date, or the agent re-asks for the caller's name when Maria Silva was just given.",
+      "tags": [
+        "waitlist",
+        "core"
+      ]
+    },
+    {
+      "name": "WL-4 — WAITLIST REQUEST: waitlist_add result speech + follow-up waitlist_search_next call, same turn",
+      "history": [
+        {
+          "role": "user",
+          "content": "Put me on the waitlist, I'm Tom Baxter"
+        },
+        {
+          "role": "assistant",
+          "content": "One moment."
+        },
+        {
+          "role": "tool",
+          "content": "[universal_router response]: {\"status\": \"success\", \"intent\": \"waitlist_add\", \"message\": \"I've added you to the waitlist. If a cancellation comes up, the clinic will contact you.\"}"
+        }
+      ],
+      "expected_behavior": "PASS if the agent speaks the message field verbatim ('I've added you to the waitlist. If a cancellation comes up, the clinic will contact you.'), THEN speaks 'Let me also find the next available time for you, in case nothing opens up sooner.', AND calls universal_router intent='waitlist_search_next' with payload timeframe_raw='auto_fna' — all three in the SAME turn. FAIL if any of the three pieces is missing, the tool call is smart_voice_agent instead of universal_router, or the follow-up is deferred to a later turn.",
+      "tags": [
+        "waitlist"
+      ]
+    },
+    {
+      "name": "WL-5 — WAITLIST REQUEST: fires even when combined with other content in the same message",
+      "history": [
+        {
+          "role": "user",
+          "content": "Ugh, that's frustrating — is there any way you could let me know if a spot opens up? I really wanted to come in this week."
+        }
+      ],
+      "expected_behavior": "Assume {{caller_first_name}}='Ben' and {{caller_last_name}}='Okafor' are already populated. PASS if the agent treats this as a WAITLIST REQUEST (the 'let me know if a spot opens up' phrase) despite the surrounding frustration/context, and calls universal_router intent='waitlist_add' with patient_name='Ben Okafor'. FAIL if the agent instead routes to info_pivot, asks a clarifying question about what 'this week' means, or fails to recognize the waitlist request buried in the longer message.",
+      "tags": [
+        "waitlist"
+      ]
+    },
+    {
+      "name": "DTA-1 — DEPENDENT-TIMING ANCHOR: caller's own appointment already confirmed this call, friend's timing stated as dependent on it",
+      "history": [
+        {
+          "role": "assistant",
+          "content": "Wonderful! You're confirmed with Brendan for Massage on Monday, August 24 at 9 AM at our Balmain clinic."
+        },
+        {
+          "role": "user",
+          "content": "Can you also book a different appointment for my friend Jason?"
+        },
+        {
+          "role": "assistant",
+          "content": "Sure — what service would Jason like to book?"
+        },
+        {
+          "role": "user",
+          "content": "Acupuncture"
+        },
+        {
+          "role": "assistant",
+          "content": "Has Jason had acupuncture with us before?"
+        },
+        {
+          "role": "user",
+          "content": "No"
+        },
+        {
+          "role": "assistant",
+          "content": "When would Jason like to come in?"
+        },
+        {
+          "role": "user",
+          "content": "Immediately after my appointment"
+        }
+      ],
+      "expected_behavior": "Assume {{booking_for}}='other' and {{family_member_name}}='Jason' are already set from Node 2's confirm_service call, and {{appointment_type}}='Acupuncture (Initial)' is resolved. No practitioner or location preference has been stated for Jason. PASS if the agent calls smart_voice_agent intent='availability' with dependent_on_prior_booking=true (alongside a normal date/preferred_time best guess — e.g. date='2026-08-24', some preferred_time near the caller's own 9 AM Massage) — the flag must be true because the caller's stated timing ('immediately after my appointment') is relative to the caller's OWN appointment, a DIFFERENT identity's booking, already confirmed earlier this call. FAIL if dependent_on_prior_booking is omitted or false, or if the agent asks a clarifying question instead of proceeding to the tool call.",
+      "tags": [
+        "dependent-timing",
+        "core"
+      ]
+    },
+    {
+      "name": "DTA-2 — DEPENDENT-TIMING ANCHOR precision: ordinary personal time preference must NOT set the flag",
+      "history": [
+        {
+          "role": "assistant",
+          "content": "When would you like to come in?"
+        },
+        {
+          "role": "user",
+          "content": "Wednesday, sometime after 2pm"
+        }
+      ],
+      "expected_behavior": "PASS if the agent calls smart_voice_agent intent='availability' with date_ref_weekday='Wednesday', preferred_time='2:00 PM', preferred_time_qualifier='after', and dependent_on_prior_booking omitted or false — this is an ordinary personal time preference with no reference to another identity's booking, not a dependent-timing case. FAIL if dependent_on_prior_booking is set to true — that would be a false positive, escalating an entirely ordinary single-party booking.",
+      "tags": [
+        "dependent-timing"
       ]
     }
   ]
