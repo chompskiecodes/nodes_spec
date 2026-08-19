@@ -57,6 +57,42 @@ Node 1c is Override: Disabled -> system_prompt.txt is prepended to its Additiona
 before the scaffold agent is created, matching the runtime context the LLM actually sees
 (same convention as test_node6a_scaffold.py in this directory).
 
+STATUS UPDATE 2026-08-20 (later, same day) — NAME KNOWN CHECK garbling fixed; T4 is a
+SEPARATE, still-open bug; T5/T6 "failed" labels are an EL evaluator artifact, not real
+failures. See project_node1c_scaffold_test_and_bugs_2026_08_20 (session memory) for the
+full investigation.
+  - FIXED: the garbled "a caller" placeholder patient_name (T5's payload construction).
+    node_1c no longer builds patient_name from a DV-conditional at all — three new
+    dynamic_variable-backed request params (known_caller_first_name/known_caller_last_name/
+    known_patient_name_raw) let the backend resolve the known name itself, zero model
+    involvement, same mechanism as caller_id/session_id/practitioner_id. The node's
+    NAME+DOB PATH now either relays the name the caller JUST gave this turn, or omits
+    patient_name from the payload entirely when it was already known. Verified via raw
+    tool-call payload inspection (ground truth params_as_json, not the pass/fail label —
+    see session_id_dv_sentinel_bug.md for why that distinction matters): payload is now
+    cleanly {"date_of_birth": "1990-03-14"} with patient_name correctly absent, across
+    multiple re-runs.
+  - EL EVALUATOR ARTIFACT (not a real failure): T5 and T6 both show status="failed" with
+    rationale "Expected 0 tool calls, received 1" even though their raw tool calls are
+    unambiguously correct (T5: intent=appointment_lookup_retry with a clean payload; T6:
+    intent=wrap_up, exactly per OUTPUT CONTRACT). T6's node text was not touched by this
+    fix and was previously confirmed working — the same generic rationale string appearing
+    on both an untouched, previously-good test and a freshly-fixed one, both with genuinely
+    correct tool calls, indicates this is a transient EL Agent-Testing API scoring glitch,
+    not a signal about node correctness. Ground truth is always the raw tool_calls array on
+    the test run, not the status/rationale field, when the two disagree this blatantly.
+  - STILL OPEN, confirmed real (NOT the same bug as the garbling above): the model still
+    asks "Can I get your full name?" in T4 even when caller_first_name/caller_last_name are
+    unambiguously set. Reproduced 4 times across 3 distinct prompt wordings (the original,
+    an "if any of these" rewrite, an "1. If X... Otherwise..." plain-sequential rewrite) AND
+    a diagnostic where {{caller_first_name}}/{{caller_last_name}} were pre-substituted as
+    literal Python-level text (bypassing EL's own dynamic_variable_placeholders mechanism
+    entirely, the same technique that proved the intent-substitution bug) — still asked for
+    the name even then, which rules out DV-substitution unreliability as the cause. This is
+    a genuine Haiku attention/reasoning limitation specific to this conversational context
+    (deep into ALTERNATE NUMBER PATH's two-strikes failure before reaching NAME+DOB PATH),
+    not a wording problem — do not attempt another wording-only fix without a new hypothesis.
+
 Usage:
     py -X utf8 nodes/shared/test_node1c_scaffold.py --run
     py -X utf8 nodes/shared/test_node1c_scaffold.py --run --filter T2
@@ -333,23 +369,27 @@ def generate_tests() -> List[Dict]:
             _m("user", "The fourteenth of March, nineteen ninety.", 14),
         ],
         "success_condition": (
-            "The caller declined the alternate-number offer and NAME KNOWN CHECK already skipped "
-            "asking for a name (caller_first_name=\"Karlee\", caller_last_name=\"Mercuri\" are set). "
-            "The caller has now given a spoken date of birth (\"the fourteenth of March, nineteen "
-            "ninety\"). PASS: agent speaks one filler phrase, then calls universal_router with "
-            'intent="appointment_lookup_retry" (a FIXED LITERAL value — never "details" or '
-            '"details_past" directly), and payload={"patient_name": "Karlee Mercuri", '
-            '"date_of_birth": "1990-03-14"} — the date normalized to YYYY-MM-DD. Does NOT ask for '
-            "the date again. Does NOT ask for a name (already known)."
+            "The caller declined the alternate-number offer and step 1 of NAME+DOB PATH already "
+            "skipped asking for a name (caller_first_name=\"Karlee\", caller_last_name=\"Mercuri\" "
+            "are set). The caller has now given a spoken date of birth (\"the fourteenth of March, "
+            "nineteen ninety\"). PASS: agent speaks one filler phrase, then calls universal_router "
+            'with intent="appointment_lookup_retry" (a FIXED LITERAL value — never "details" or '
+            '"details_past" directly), and payload={"date_of_birth": "1990-03-14"} — date '
+            "normalized to YYYY-MM-DD. patient_name must be OMITTED from the payload entirely "
+            "(the backend resolves the known name itself from known_caller_first_name/"
+            "known_caller_last_name DVs — the agent must NOT write \"Karlee Mercuri\" or any "
+            "other name/placeholder into a patient_name field). Does NOT ask for the date again. "
+            "Does NOT ask for a name (already known)."
         ),
         "success_examples": [
-            _ok('One moment. [calls universal_router intent=appointment_lookup_retry payload={"patient_name":"Karlee Mercuri","date_of_birth":"1990-03-14"}]'),
+            _ok('One moment. [calls universal_router intent=appointment_lookup_retry payload={"date_of_birth":"1990-03-14"}]'),
         ],
         "failure_examples": [
             _fail("Can I get your full name?"),
             _fail('[calls universal_router payload={"date_of_birth": "March 14, 1990"}] — not normalized to YYYY-MM-DD'),
             _fail('[calls universal_router intent=details ...] — must be the literal appointment_lookup_retry, not details'),
             _fail('[calls universal_router intent=details_past ...] — must be the literal appointment_lookup_retry, not details_past'),
+            _fail('[calls universal_router payload={"patient_name": "a caller", "date_of_birth": "1990-03-14"}] — must not fabricate/reconstruct a name value itself'),
             _fail("Can you give me your date of birth again?"),
             _fail("[no tool call]"),
         ],
