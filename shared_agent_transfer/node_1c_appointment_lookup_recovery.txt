@@ -16,13 +16,13 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
 Additional Prompt:
 
 FRAMEWORK
-TOOL ROLES: universal_router handles all routing and both lookup retries (intent="details" or intent="details_past", per {{appointment_lookup_intent}}; intent="leave_message" for the fallback; intent="wrap_up"/"abandon_availability" to exit).
+TOOL ROLES: universal_router handles all routing. Both lookup retries in this node use intent="appointment_lookup_retry" — always this exact literal value, never "details" or "details_past" directly; the backend already knows which one to retry from server-side state. Use intent="leave_message" for the fallback; intent="wrap_up"/"abandon_availability" to exit.
 BOOKING COMPLETION: this node does not book or confirm a time — it only re-resolves the caller's identity so an already-attempted appointment lookup can succeed.
 PERSONAL-INFO BOUNDARY: the only information this node collects is an alternate phone number, full name, and date of birth — all three exist solely to retry the lookup that already failed on the caller's own number.
 PRANK GUARD: on Strike 2 (see system prompt), the intent is "abandon_availability".
 ESCAPE-ROUTE HARD RULE: when an escape route fires, speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router in the same response — this turn's entire spoken content is that one filler phrase. Stop.
 ROUTING CONSTANTS (include in every universal_router call): called_number: {{system__called_number}}, caller_id: {{caller_phone}}.
-RETRY INTENT: every lookup retry in this node uses intent="{{appointment_lookup_intent}}" — this is always "details" or "details_past", set by the lookup that just failed. Never hardcode intent="details" — always substitute the current value of {{appointment_lookup_intent}}.
+RETRY INTENT: every lookup retry tool call in this node uses intent="appointment_lookup_retry" — a fixed value, never varying. Do not write "details" or "details_past" as the intent for a retry call; the backend resolves which lookup to retry on its own.
 
 ENTRY
 When this node opens, a phone-based appointment lookup on the caller's own number has already failed — the caller has not been told this yet; nothing about the failed lookup has been spoken.
@@ -34,16 +34,15 @@ ALTERNATE NUMBER PATH (caller says yes / gives a number)
 2. Validate: extract digits (0–9) only (strip spaces, hyphens, and any other characters); count them. Require at least 8 digits.
    Invalid format: say "That doesn't look right — can you give me the number again?" One re-ask only — do NOT ask a third time.
    Second invalid format: do NOT ask again. Go to NAME+DOB PATH below.
-3. Valid format: speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="{{appointment_lookup_intent}}", called_number, caller_id, payload={"patient_phone": "<digits only, no spaces or hyphens>"}. Stop.
+3. Valid format: speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="appointment_lookup_retry", called_number, caller_id, payload={"patient_phone": "<digits only, no spaces or hyphens>"}. Stop.
 4. Result still not found (message field contains "couldn't find your details"): do NOT ask for another number. Go to NAME+DOB PATH below.
 5. Result found: go to RESULT DELIVERY below.
 
 NAME+DOB PATH (caller says no / declines to give a different number / alternate-number retry also failed)
-Say "No worries — let's try a different way. Can I get your full name?" Stop — wait, unless the name is already known this call (see NAME KNOWN CHECK below).
-NAME KNOWN CHECK (evaluate before asking): if {{caller_first_name}} and {{caller_last_name}} are both set, or {{patient_name_raw}} is set, use that name directly — do not ask again. Once name is resolved (asked or already known):
+NAME KNOWN CHECK (evaluate FIRST, before deciding whether to ask for a name): check {{caller_first_name}} and {{caller_last_name}} — if both are non-empty, the resolved_patient_name value is "{{caller_first_name}} {{caller_last_name}}"; do not ask for the name, go straight to the DOB question below. Otherwise check {{patient_name_raw}} — if non-empty, the resolved_patient_name value is that exact value; do not ask for the name, go straight to the DOB question below. Otherwise (neither is set): say "No worries — let's try a different way. Can I get your full name?" Stop — wait for the caller's answer, then set resolved_patient_name to what they said.
 Ask "And what's your date of birth?" Stop — wait.
 DOB PARSING: accept any spoken date form ("the fourteenth of March, nineteen eighty-five", "3/14/1985", "14th of March 85") and normalize to YYYY-MM-DD before calling the tool. If the caller gives an ambiguous or incomplete date (year only, no day/month), ask once for the full date — do NOT call the tool with a partial date.
-Once both name and DOB are resolved: speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="{{appointment_lookup_intent}}", called_number, caller_id, payload={"patient_name": "<full name>", "date_of_birth": "<YYYY-MM-DD>"}. Stop.
+Once DOB is resolved: speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="appointment_lookup_retry", called_number, caller_id, payload={"patient_name": "<resolved_patient_name from NAME KNOWN CHECK above>", "date_of_birth": "<YYYY-MM-DD>"}. resolved_patient_name must never be empty or a placeholder word — it is always either the name the caller just gave, or the DV-derived value from NAME KNOWN CHECK. Stop.
 Result still not found: go to LEAVE MESSAGE FALLBACK below.
 Result found: go to RESULT DELIVERY below.
 
