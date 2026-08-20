@@ -1,26 +1,104 @@
 {
-  "_comment": "Tests Bob Ward Physio's passthrough-only node: every booking routes directly to Standard Appointment with zero gate, zero spoken output unless CONCERN-GUIDED fires (explicit symptom vocabulary triggers empathetic line + tool call).",
+  "_comment": "Family E (PASSTHROUGH) battery for Bob Ward Physio's node_2. This clinic has ONE appointment type, so the node does no service resolution: it only guards (CONCERN-GUIDED empathy, TIME-ONLY guard, RESCHEDULE AVAILABILITY SIGNAL) and forwards to confirm_service with a hardcoded appointment_type_id. CASE 1 IS INACTIVE: the node must NEVER ask a new/existing gate question, even when the caller's phrasing strongly invites one. Note: confirm_service turns speak exactly ONE filler phrase per CONFIRM_SERVICE FILLER RULE (this replaced the older fully-silent rule) - except on the CONCERN-GUIDED path, where the empathetic constant REPLACES the filler.",
   "scenarios": [
     {
-      "name": "Generic booking request — silent direct route, no gate",
+      "name": "E1 generic booking - one filler then confirm_service, no gate",
+      "tags": ["core"],
       "history": [
         {"role": "user", "content": "I'd like to book a physiotherapy appointment."}
       ],
-      "expected_behavior": "PASS if agent calls universal_router intent='confirm_service' silently with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard', with zero spoken output. FAIL if agent asks a new/existing gate, asks any question, or speaks any text before the tool call."
+      "expected_behavior": "PASS if the agent speaks exactly one TOOL-CALL FILLER phrase ('One moment.' / 'Just a sec.' / 'Let me check that.') and in the same turn calls universal_router intent='confirm_service' with payload containing appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard'. FAIL if the agent asks any question (especially a new/existing gate), speaks anything beyond the single filler phrase, omits any of the three required payload fields, or makes no tool call."
     },
     {
-      "name": "Caller with explicit symptom — empathetic line then silent tool call in same turn",
+      "name": "E2 explicit symptom - empathetic constant then tool call, nothing between",
+      "tags": ["core", "concern-guided"],
       "history": [
         {"role": "user", "content": "My back is killing me and I need to see someone."}
       ],
-      "expected_behavior": "PASS if agent speaks exactly one empathetic constant ('Sorry to hear that.' or 'That's no good.' or 'Let's get that looked at.' or 'We can definitely help with that.') immediately followed by universal_router intent='confirm_service' with appointment_type_id='1406607806622081880' in the SAME turn, with no other words between the empathetic line and the tool call. FAIL if agent asks a gate question, adds bridge phrases after the empathetic constant, or omits either the spoken line or the tool call."
+      "expected_behavior": "PASS if the agent speaks EXACTLY one empathetic constant verbatim ('That's no good.' / 'Sorry to hear that.' / 'Let's get that looked at.' / 'We can definitely help with that.') and the very next thing is a universal_router intent='confirm_service' call with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard'. FAIL if a filler phrase is spoken in addition to the constant, if ANY word/bridge phrase/extra sentence appears between the constant's final period and the tool call, if a gate question is asked, or if either the spoken constant or the tool call is missing."
     },
     {
-      "name": "Caller states 'I'm a new patient' — still routes directly, no gate",
+      "name": "E3 caller volunteers 'I'm a new patient' - no gate, direct route",
+      "tags": ["core", "no-gate"],
       "history": [
         {"role": "user", "content": "I'm a new patient and I'd like to book an appointment."}
       ],
-      "expected_behavior": "PASS if agent calls universal_router intent='confirm_service' silently with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard'. FAIL if agent asks a new/existing gate question or asks any other question before routing."
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='confirm_service' with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard' (patient_status='new' may optionally be piggybacked). FAIL if the agent asks a new/existing gate question, asks whether they have been in before, or asks any other question before routing."
+    },
+    {
+      "name": "E4 gate-inviting phrasing - must still never ask the gate",
+      "tags": ["core", "no-gate"],
+      "history": [
+        {"role": "user", "content": "Hi, I've been in to see you before - is there anything you need to know from me before I book?"}
+      ],
+      "expected_behavior": "PASS if the agent does NOT ask a new-or-returning gate question and instead routes: one filler phrase then universal_router intent='confirm_service' with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard'. FAIL if the agent asks 'have you been here before?', 'are you a new or existing patient?', or any equivalent gate question - that is the CASE 1 INACTIVE override failing."
+    },
+    {
+      "name": "E5 third-party booking with volunteered name - no gate, booking_for captured",
+      "tags": ["core", "no-gate"],
+      "history": [
+        {"role": "user", "content": "I want to book an appointment for my wife Sarah."}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='confirm_service' with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard', booking_for='other', family_member_name='Sarah'. FAIL if the agent asks a gate question (including 'has she been here before?'), asks for Sarah's details, or omits booking_for/family_member_name."
+    },
+    {
+      "name": "E6 time-only guard - no booking signal, ask and halt with zero tool calls",
+      "tags": ["core", "time-only-guard"],
+      "history": [
+        {"role": "user", "content": "Tuesday at three."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly 'What can I help you with today?' and makes ZERO tool calls (capturing Tuesday at three silently as timeframe_raw). FAIL if the agent calls universal_router at all this turn, or speaks anything other than that question."
+    },
+    {
+      "name": "E7 booking signal plus time - guard must NOT fire, route with timeframe_raw",
+      "tags": ["core", "time-only-guard"],
+      "history": [
+        {"role": "user", "content": "Can I get in Monday morning?"}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='confirm_service' with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard', and timeframe_raw capturing 'Monday morning'. FAIL if the agent asks 'What can I help you with today?' (TIME-ONLY GUARD wrongly firing despite the 'get in' booking signal), or omits timeframe_raw."
+    },
+    {
+      "name": "E8 timeframe survival across turns - time stated before the booking request",
+      "tags": ["core", "timeframe"],
+      "history": [
+        {"role": "user", "content": "Thursday afternoon."},
+        {"role": "assistant", "content": "What can I help you with today?"},
+        {"role": "user", "content": "I need to book in with the physio."}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='confirm_service' with appointment_type_id='1406607806622081880', appointment_type='Standard Appointment', variant_type='standard', AND timeframe_raw carrying the earlier 'Thursday afternoon' reference. FAIL if timeframe_raw is omitted or empty (TIMEFRAME_RAW SURVIVAL RULE violation), or if a gate question is asked."
+    },
+    {
+      "name": "E9 cancel escape",
+      "tags": ["core", "escape"],
+      "history": [
+        {"role": "user", "content": "Actually I need to cancel my appointment next week."}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='cancel_intent' with called_number and caller_id. FAIL if the agent calls confirm_service, asks a question, or speaks more than the single filler phrase."
+    },
+    {
+      "name": "E10 wrap_up",
+      "tags": ["core", "escape"],
+      "history": [
+        {"role": "user", "content": "Oh actually, no thanks - that's all I needed. Bye."}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='wrap_up'. FAIL if the agent calls confirm_service, keeps the caller on the line with a question, or uses any other intent to end the call."
+    },
+    {
+      "name": "E11 info pivot - general clinic question, no booking",
+      "tags": ["core", "escape"],
+      "history": [
+        {"role": "user", "content": "What time do you close on Saturdays?"}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='info_pivot'. FAIL if the agent calls confirm_service, answers the hours question from its own knowledge, or asks a gate question."
+    },
+    {
+      "name": "E12 reschedule availability signal - re-entry after patient lookup",
+      "tags": ["core", "re-entry"],
+      "history": [
+        {"role": "system", "content": "DYNAMIC VARIABLES: patient_lookup_done = \"true\", details_delivered = \"true\". A details_ack tool call has already completed earlier in this call and the caller's upcoming appointment was already read out to them."},
+        {"role": "user", "content": "Is there anything earlier than that?"}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase and calls universal_router intent='reschedule' (RESCHEDULE AVAILABILITY SIGNAL: patient_lookup_done is true, message contains 'earlier', no new-booking language). FAIL if the agent calls confirm_service, cancel_intent, or asks a question instead of routing."
     }
   ]
 }

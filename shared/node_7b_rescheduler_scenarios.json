@@ -590,6 +590,57 @@
       "expected_behavior": "PASS if: agent does NOT enter BOTH APPOINTMENTS FLOW (linked_appointment_id is empty) — proceeds through the ordinary RESCHEDULE BYPASS path instead, asking 'What day and time works for you?' with no tool call. FAIL if: agent asks about a second appointment, references Peter or any other party, or otherwise behaves as if a linked appointment exists."
     },
     {
+      "name": "ASAP multi-practitioner response — earliest day (1 slot) must be spoken first, not dropped in favor of a later day with more slots (regression test for the 2026-09-10 Raymond Terrace bug)",
+      "tags": [
+        "core",
+        "asap-multi-practitioner"
+      ],
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "As soon as possible."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent asap_slots response]: {\"success\": true, \"found\": true, \"practitioners\": [{\"practitioner_id\": \"412461073866693445\", \"practitioner_name\": \"Bruce Sutton\", \"business_id\": \"412584500640357006\", \"business_name\": \"Tea Gardens\", \"dates\": [{\"date\": \"2026-09-10\", \"day_of_week\": \"Thursday, September 10th\", \"slot_groups\": {\"afternoon\": [\"3:40 PM\"]}}, {\"date\": \"2026-09-11\", \"day_of_week\": \"Friday, September 11th\", \"slot_groups\": {\"afternoon\": [\"2:20 PM\", \"3 PM\"]}}]}, {\"practitioner_id\": \"883714138008722063\", \"practitioner_name\": \"Elisa Brownhill\", \"business_id\": \"412451910923065987\", \"business_name\": \"Raymond Terrace\", \"dates\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday, September 17th\", \"slot_groups\": {\"afternoon\": [\"1:20 PM\", \"2 PM\", \"2:40 PM\", \"3:20 PM\"]}}]}], \"agent_instruction\": \"SLOT INTEGRITY: Read appointment times from slot_groups exactly as they appear. Do not estimate, round, or invent a time. ASAP: Thursday, September 10th has 1 opening — state the time upfront when offering the day. Friday, September 11th also has availability as a secondary option. Begin with 'The next available is Thursday, September 10th...' and mention Friday, September 11th as an alternative.\"}"
+        }
+      ],
+      "expected_behavior": "PASS if: agent's spoken offer includes Thursday, September 10th (with its single 3:40 PM slot, stated upfront) FIRST, then Friday, September 11th (2:20 PM or 3 PM) as the second day — e.g. 'The next available is Thursday the 10th at 3:40 PM with Bruce Sutton, or Friday the 11th I have 2:20 or 3 PM — which works for you?' Elisa Brownhill's later September 17th date is correctly dropped (only the earliest 2 dates are spoken). FAIL if: agent skips Thursday September 10th entirely and only offers Friday September 11th (the actual bug — jumping to the day with more slot options instead of the chronologically earliest day), or offers Elisa's September 17th instead of/alongside the earlier two dates."
+    },
+    {
+      "name": "ASAP multi-practitioner follow-up — caller names the earlier day only, must re-offer its single cached slot with no new tool call",
+      "tags": [
+        "asap-multi-practitioner"
+      ],
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "As soon as possible."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent asap_slots response]: {\"success\": true, \"found\": true, \"practitioners\": [{\"practitioner_id\": \"412461073866693445\", \"practitioner_name\": \"Bruce Sutton\", \"business_id\": \"412584500640357006\", \"business_name\": \"Tea Gardens\", \"dates\": [{\"date\": \"2026-09-10\", \"day_of_week\": \"Thursday, September 10th\", \"slot_groups\": {\"afternoon\": [\"3:40 PM\"]}}, {\"date\": \"2026-09-11\", \"day_of_week\": \"Friday, September 11th\", \"slot_groups\": {\"afternoon\": [\"2:20 PM\", \"3 PM\"]}}]}]}"
+        },
+        {
+          "role": "assistant",
+          "content": "The next available is Thursday the 10th at 3:40 PM with Bruce Sutton, or Friday the 11th I have 2:20 or 3 PM — which works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Thursday."
+        }
+      ],
+      "expected_behavior": "PASS if: agent re-offers Thursday's already-cached slot per the 'caller names a day only' rule (e.g. 'I've got 3:40 PM — does that work?') with NO new tool call. FAIL if: agent calls smart_voice_agent again to re-fetch availability, invents a different Thursday time, or silently books without a confirming offer."
+    },
+    {
       "name": "EW1 — exact transcript repro: 'not on Thursday' after cancel+rebook offer",
       "tags": [
         "excluded-weekday",
@@ -652,6 +703,163 @@
         }
       ],
       "expected_behavior": "PASS if: agent offers the Friday, September 18th afternoon slots (1:20 PM or 2 PM, per SLOT OFFER HARD RULE) with Elisa Brownhill, and does NOT call smart_voice_agent again, does NOT say 'nothing available', and does NOT mention Thursday at all. FAIL if the agent re-searches, claims no availability exists, or expresses doubt about the Friday result because Thursday was excluded earlier."
+    },
+    {
+      "name": "DIRECTIONAL TIME QUALIFIER — between, caller states window with later time first, must sort earlier/later regardless of spoken order (regression test for the 2026-08-19 Raymond Terrace inverted-range bug)",
+      "tags": [
+        "core",
+        "qualifier-ordering"
+      ],
+      "dvs": {
+        "appointment_type": "Standard Raymond Terrace",
+        "appointment_type_id": "2004889856265689728",
+        "practitioner_id": "412461073866693445",
+        "reschedule_mode": ""
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Thursday, between five and four."
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks a filler phrase and calls smart_voice_agent with preferred_time_qualifier='between', preferred_time set to the EARLIER of the two times (4pm / '4:00 PM') and preferred_time_end set to the LATER of the two times (5pm / '5:00 PM') — regardless of which order the caller spoke them in (caller said 'five' before 'four'). FAIL if: preferred_time is set to the later time (5pm) and preferred_time_end to the earlier time (4pm) — this is the exact live bug: an inverted range (min>max) that matches zero slots on any date."
+    },
+    {
+      "name": "B2 NO SLOTS — waitlist_eligible=true, caller accepts, name known via DVs, no reschedule in progress",
+      "tags": [
+        "core",
+        "b2-waitlist-offer",
+        "waitlist"
+      ],
+      "dvs": {
+        "reschedule_mode": "",
+        "appointment_type": "Standard Raymond Terrace",
+        "appointment_type_id": "2004889856265689728",
+        "caller_first_name": "Karlee",
+        "caller_last_name": "Mercuri"
+      },
+      "history": [
+        {
+          "role": "user",
+          "content": "Earlier on the twentieth?"
+        },
+        {
+          "role": "assistant",
+          "content": "Just a sec."
+        },
+        {
+          "role": "tool",
+          "content": "{\"success\": false, \"error\": \"no_availability\", \"message\": \"There are no available appointments for Standard Raymond Terrace on Tuesday the 20th before 5pm.\", \"waitlist_eligible\": \"true\", \"found\": false}"
+        },
+        {
+          "role": "assistant",
+          "content": "I'm sorry, there's nothing before 5pm on Tuesday the twentieth. Would you like me to add you to the waitlist, or would you prefer a different time or day?"
+        },
+        {
+          "role": "user",
+          "content": "Yes please, put me on the waitlist."
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks one filler phrase and calls universal_router intent='waitlist_add' with patient_name='Karlee Mercuri' (from DVs, no name question needed) and appointment_type_id='2004889856265689728' — reschedule_mode is not 'true' so the REAL-CANCEL GUARD must NOT fire (no reschedule_cancelled call). FAIL if: agent asks for the caller's name again (already known via DVs), asks the caller to repeat their preference, or fails to call waitlist_add."
+    },
+    {
+      "name": "B2 NO SLOTS — waitlist_eligible=true, caller accepts, but reschedule_mode true and NOT yet finalized — REAL-CANCEL GUARD must fire before waitlist_add",
+      "tags": [
+        "core",
+        "b2-waitlist-offer",
+        "waitlist"
+      ],
+      "dvs": {
+        "reschedule_mode": "true",
+        "real_cancellation_finalized": "",
+        "appointment_type": "Standard Raymond Terrace",
+        "appointment_type_id": "2004889856265689728",
+        "caller_first_name": "Karlee",
+        "caller_last_name": "Mercuri"
+      },
+      "history": [
+        {
+          "role": "user",
+          "content": "Earlier on the twentieth?"
+        },
+        {
+          "role": "assistant",
+          "content": "Just a sec."
+        },
+        {
+          "role": "tool",
+          "content": "{\"success\": false, \"error\": \"no_availability\", \"message\": \"There are no available appointments for Standard Raymond Terrace on Tuesday the 20th before 5pm.\", \"waitlist_eligible\": \"true\", \"found\": false}"
+        },
+        {
+          "role": "assistant",
+          "content": "I'm sorry, there's nothing before 5pm on Tuesday the twentieth. Would you like me to add you to the waitlist, or would you prefer a different time or day?"
+        },
+        {
+          "role": "user",
+          "content": "Yes, waitlist please."
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks one filler phrase and calls universal_router intent='reschedule_cancelled' with payload {reschedule_mode: '', cancellation_completed: 'none'} — the REAL-CANCEL GUARD must fire first because real_cancellation_finalized is not 'true', exactly as it does for Signal 0.6. FAIL if: agent calls intent='waitlist_add' directly — this would tell the caller they're on the waitlist while their old appointment's real cancellation is still unresolved, reproducing the original 2026-08-18 bug in the new B2 offer path."
+    },
+    {
+      "name": "B2 NO SLOTS — waitlist_eligible NOT true — must never mention the waitlist",
+      "tags": [
+        "core",
+        "b2-waitlist-offer"
+      ],
+      "dvs": {
+        "reschedule_mode": "",
+        "appointment_type": "Massage",
+        "appointment_type_id": "type_222"
+      },
+      "history": [
+        {
+          "role": "user",
+          "content": "What about Friday?"
+        },
+        {
+          "role": "assistant",
+          "content": "Just a sec."
+        },
+        {
+          "role": "tool",
+          "content": "{\"success\": false, \"error\": \"no_availability\", \"message\": \"There are no available appointments for Massage on Friday the 23rd.\", \"found\": false}"
+        }
+      ],
+      "expected_behavior": "PASS if: agent says something like 'I'm sorry, there's nothing on Friday the 23rd. Would another time or day work?' with NO mention of a waitlist and no tool call this turn — the tool result has no waitlist_eligible field (clinic not waitlist-enabled or search didn't set it), so B2's NOT WAITLIST-ELIGIBLE branch applies. FAIL if: agent offers or mentions a waitlist when waitlist_eligible was never set to 'true'."
+    },
+    {
+      "name": "B2 NO SLOTS — waitlist_eligible NOT true, qualifier was sent — apology must name the qualifier, not just the band",
+      "tags": [
+        "core",
+        "b2-waitlist-offer",
+        "qualifier-ordering"
+      ],
+      "dvs": {
+        "reschedule_mode": "",
+        "appointment_type": "Standard Raymond Terrace",
+        "appointment_type_id": "2004889856265689728",
+        "practitioner_id": "412461073866693445"
+      },
+      "history": [
+        {
+          "role": "user",
+          "content": "What about the twentieth, earlier than five?"
+        },
+        {
+          "role": "assistant",
+          "content": "Just a sec."
+        },
+        {
+          "role": "tool",
+          "content": "{\"success\": false, \"error\": \"no_availability\", \"message\": \"There are no available appointments for Standard Raymond Terrace on Tuesday the 20th before 5:00 PM.\", \"found\": false}"
+        }
+      ],
+      "expected_behavior": "PASS if: agent's apology explicitly names the qualifier the caller stated on this search — something like 'I'm sorry, there's nothing before 5pm in that period. Would another time or day work?' FAIL if: agent says only 'I'm sorry, there's nothing in that period...' with no mention of 'before 5' / '5pm' — this silently drops the caller's own stated constraint, exactly the gap found after the ordering fix shipped (the backend's message field already names the qualifier, but this node builds its own apology sentence instead of reading that field, so the node text itself must include it)."
     }
   ]
 }

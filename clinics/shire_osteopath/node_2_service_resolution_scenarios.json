@@ -1,0 +1,146 @@
+{
+  "_comment": "Family C (VISIT_TYPE) scenario battery for shire_osteopath's Node 2. Family C has no CATEGORY TABLE dispatch: SERVICE DETECTION declares initial/subsequent/duration/concession keyword signals, PRIMARY FLOW steps through them (STEP 1 service check -> STEP 2 have-you-been-before question), SERVICE BRANCHES are visit-type branches (INITIAL / SUBSEQUENT), UNIVERSAL ESCAPES carries CANCEL ESCAPE + INFO PIVOT ESCAPE, and the file ends in HARD RULE - EMAIL ESCALATION + EMAIL ESCALATION FLOW instead of the usual HARD RULE + TOOL CALL. Runtime LLM claude-haiku-4-5, Override: Disabled (inherits nodes/shared/system_prompt.txt).",
+  "scenarios": [
+    {
+      "name": "SD-1 initial signal detected directly - no gate question",
+      "tags": ["core", "service-detection"],
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to book in. It's my first time."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one TOOL-CALL FILLER phrase (e.g. 'One moment.') and in the SAME turn calls universal_router intent='confirm_service' with payload appointment_type='Initial Appointment 60 min - standard', appointment_type_id='1592289604805862909', variant_type='initial_standard', patient_status='new'. FAIL if it asks the have-you-been-before question anyway (SERVICE DETECTION already resolved INITIAL), or if it speaks anything beyond the single filler phrase, or if it is fully silent, or if it uses a different appointment_type_id."
+    },
+    {
+      "name": "SD-2 subsequent + extended duration signal in one message",
+      "tags": ["core", "service-detection"],
+      "history": [
+        {"role": "user", "content": "I need a follow up appointment, the extended 60 minute one please."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='confirm_service' with appointment_type_id='1729472131701417513', variant_type='subsequent_extended', patient_status='existing'. FAIL if it asks the SUBSEQUENT_DURATION question (the duration signal was already given), or asks the have-you-been-before question, or uses the standard/concession subsequent ID."
+    },
+    {
+      "name": "FLOW-1 no visit-type detected - STEP 2 gate question, spoken only",
+      "tags": ["core", "primary-flow"],
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to make an appointment please."}
+      ],
+      "expected_behavior": "PASS if the agent asks VARIANT_SELF verbatim ('Have you been to Shire Osteopath before?') as a spoken-only turn with ZERO tool calls. FAIL if it calls any tool this turn, or guesses a visit type, or asks about concession/duration first, or asks whether the booking is for the caller or someone else."
+    },
+    {
+      "name": "FLOW-2 gate answered yes - Scan K maps to SUBSEQUENT_DURATION question",
+      "tags": ["core", "primary-flow"],
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to make an appointment please."},
+        {"role": "assistant", "content": "Have you been to Shire Osteopath before?"},
+        {"role": "user", "content": "Yes, I've been before."}
+      ],
+      "expected_behavior": "PASS if the agent asks SUBSEQUENT_DURATION (self) verbatim ('Are you after a standard 45-minute appointment, or an extended 60-minute one?') as a spoken-only turn with ZERO tool calls. FAIL if it calls confirm_service now, re-asks the have-you-been-before question, asks about concession proactively, or asks a duration question in different words that omits both the 45-minute and 60-minute options."
+    },
+    {
+      "name": "FLOW-3 duration answered standard + timeframe stated 3 turns earlier survives",
+      "tags": ["core", "primary-flow", "timeframe"],
+      "history": [
+        {"role": "user", "content": "Hi, can I get in on Thursday afternoon?"},
+        {"role": "assistant", "content": "Have you been to Shire Osteopath before?"},
+        {"role": "user", "content": "Yeah I have."},
+        {"role": "assistant", "content": "Are you after a standard 45-minute appointment, or an extended 60-minute one?"},
+        {"role": "user", "content": "The standard one thanks."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='confirm_service' with appointment_type_id='1592289604235437564', variant_type='subsequent_standard', patient_status='existing' AND timeframe_raw carrying the Thursday afternoon reference. FAIL if timeframe_raw is missing or empty (TIMEFRAME_RAW SURVIVAL RULE violation), or the wrong ID is used, or the agent speaks anything beyond the filler phrase."
+    },
+    {
+      "name": "CONC-1 concession detected on an initial visit",
+      "tags": ["core", "concession"],
+      "history": [
+        {"role": "user", "content": "I've never been before and I have a pension card, can I book in?"}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='confirm_service' with appointment_type_id='1592303777140975108', variant_type='initial_concession', patient_status='new'. FAIL if it uses the standard initial ID '1592289604805862909', asks a concession question (concession is detect-only, never asked proactively), or asks the have-you-been-before question."
+    },
+    {
+      "name": "TP-1 third-party booking - booking_for other + family_member_name",
+      "tags": ["core", "third-party"],
+      "history": [
+        {"role": "user", "content": "I want to book an appointment for my wife Sarah, she's never been to you before."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='confirm_service' with appointment_type_id='1592289604805862909', patient_status='new', booking_for='other' and family_member_name='Sarah'. FAIL if booking_for is missing or 'self', if family_member_name is 'wife' or missing, or if the agent asks 'is that for yourself or someone else?' (ABSOLUTE BAN)."
+    },
+    {
+      "name": "TP-2 third-party gate wording uses VARIANT_OTHER",
+      "tags": ["third-party", "primary-flow"],
+      "history": [
+        {"role": "user", "content": "I'd like to book something for my son."}
+      ],
+      "expected_behavior": "PASS if the agent asks VARIANT_OTHER verbatim ('Have they been to Shire Osteopath before?') as a spoken-only turn with ZERO tool calls. FAIL if it asks the self-worded VARIANT_SELF ('Have you been...'), calls a tool, or asks for the son's name."
+    },
+    {
+      "name": "ESC-1 CANCEL ESCAPE fires before any service resolution",
+      "tags": ["core", "escapes"],
+      "history": [
+        {"role": "user", "content": "Hi, I need to cancel my appointment."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='cancel_intent' with called_number and caller_id. FAIL if it asks the have-you-been-before question, calls confirm_service, uses a different intent, or restates the caller's request before the tool call."
+    },
+    {
+      "name": "ESC-2 INFO PIVOT ESCAPE on an opening-hours question",
+      "tags": ["core", "escapes"],
+      "history": [
+        {"role": "user", "content": "What are your opening hours?"}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='info_pivot'. FAIL if it answers the hours question from its own knowledge, asks a booking question, or uses any other intent."
+    },
+    {
+      "name": "EMAIL-1 second unresolved service - NOT_OFFERED second + email offer in ONE turn",
+      "tags": ["core", "email-escalation"],
+      "history": [
+        {"role": "user", "content": "Do you have remedial massage available?"},
+        {"role": "assistant", "content": "We don't offer remedial massage here — we offer osteopathy. Have you been to Shire Osteopath before?"},
+        {"role": "user", "content": "No I actually wanted acupuncture."}
+      ],
+      "expected_behavior": "PASS if in ONE spoken-only turn the agent speaks NOT_OFFERED (second) ('We don't have acupuncture here either — did osteopathy sound like it might help?') AND immediately follows it with the verbatim email offer 'I'm having trouble finding the right service -- I can send a message to the clinic so someone can follow up with you. Would that work?', with ZERO tool calls. FAIL if it waits for an answer to the 'did osteopathy...' question before offering the message, calls any tool, or omits either sentence."
+    },
+    {
+      "name": "EMAIL-2 caller agrees to the message - name gate before callback_request",
+      "tags": ["core", "email-escalation"],
+      "history": [
+        {"role": "user", "content": "Do you have remedial massage available?"},
+        {"role": "assistant", "content": "We don't offer remedial massage here — we offer osteopathy. Have you been to Shire Osteopath before?"},
+        {"role": "user", "content": "No I actually wanted acupuncture."},
+        {"role": "assistant", "content": "We don't have acupuncture here either — did osteopathy sound like it might help? I'm having trouble finding the right service -- I can send a message to the clinic so someone can follow up with you. Would that work?"},
+        {"role": "user", "content": "Yes please, that would be good."}
+      ],
+      "expected_behavior": "PASS if the agent asks for the caller's name ('Can I get your name?') as a spoken-only turn with ZERO tool calls, because caller_name is not yet known. FAIL if it fires callback_request without a name, invents a name, skips straight to the confirmation sentence, or calls wrap_up."
+    },
+    {
+      "name": "EMAIL-3 caller declines the message - wrap_up",
+      "tags": ["core", "email-escalation", "wrap-up"],
+      "history": [
+        {"role": "user", "content": "Do you have remedial massage available?"},
+        {"role": "assistant", "content": "We don't offer remedial massage here — we offer osteopathy. Have you been to Shire Osteopath before?"},
+        {"role": "user", "content": "No I actually wanted acupuncture."},
+        {"role": "assistant", "content": "We don't have acupuncture here either — did osteopathy sound like it might help? I'm having trouble finding the right service -- I can send a message to the clinic so someone can follow up with you. Would that work?"},
+        {"role": "user", "content": "No thanks, don't worry about it."}
+      ],
+      "expected_behavior": "PASS if the agent says 'No problem.' and in the SAME turn calls universal_router intent='wrap_up' with called_number and caller_id. FAIL if it calls callback_request anyway, re-offers the message, asks another booking question, or ends without any tool call."
+    },
+    {
+      "name": "PRICE-1 pricing query routes via PRICING QUERY, not confirm_service",
+      "tags": ["core", "pricing"],
+      "history": [
+        {"role": "user", "content": "How much does an initial appointment cost?"}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='get_service_price' with a payload containing an appointment_type_id drawn from the service list. FAIL if it states a price from its own knowledge, calls confirm_service, calls info_pivot, or asks the have-you-been-before question instead of answering the price ask."
+    },
+    {
+      "name": "REENTRY-1 INFO PIVOT RETURN GUARD - info_answered true with type already set",
+      "tags": ["core", "re-entry"],
+      "history": [
+        {"role": "user", "content": "I'd like to book for next Tuesday, I've been before."},
+        {"role": "assistant", "content": "Are you after a standard 45-minute appointment, or an extended 60-minute one?"},
+        {"role": "user", "content": "Standard. Actually, do you have parking?"},
+        {"role": "assistant", "content": "Just a sec."},
+        {"role": "system", "content": "TOOL RESULT (universal_router intent=info_pivot): {\"info_answered\": \"true\", \"appointment_type_id\": \"1592289604235437564\", \"appointment_type\": \"Subsequent Appointment 40 min - standard\", \"variant_type\": \"subsequent_standard\", \"patient_status\": \"existing\"}"},
+        {"role": "user", "content": "Great, thanks — yes let's go ahead."}
+      ],
+      "expected_behavior": "PASS if the agent speaks exactly one filler phrase and in the SAME turn calls universal_router intent='confirm_service' with appointment_type_id='1592289604235437564', variant_type='subsequent_standard', patient_status='existing', info_pivot_source='node_8', and timeframe_raw carrying the 'next Tuesday' reference. FAIL if it re-asks the have-you-been-before or duration question (already answered), drops timeframe_raw, or omits info_pivot_source."
+    }
+  ]
+}

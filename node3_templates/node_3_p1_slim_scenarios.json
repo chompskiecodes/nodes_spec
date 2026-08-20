@@ -2,7 +2,7 @@
   "_comment": "Scenario probes for P1 slim (single practitioner, dynamic location) — expanded to full crossover-checklist depth (see .claude/rules/node3-slim-crossover-checklist.md Section 2), matching P1 regular's battery for bidirectional parity. Covers CONFIRMATION, slot-offer counts, wrong-intent guard, year-anchor, WHO IS IT FOR / IDENTITY CORRECTION, all escape routes, message-collection routes, tool-result handling, slot-offer edge cases, and response/resume handling.",
   "scenarios": [
     {
-      "name": "C1 — Confirmation: filler phrase (no appointment detail) AND universal_router confirm_time in same response",
+      "name": "C1 — Confirmation: universal_router confirm_time called with spoken-form payload fields",
       "history": [
         {
           "role": "user",
@@ -21,7 +21,41 @@
           "content": "9am works for me"
         }
       ],
-      "expected_behavior": "PASS if: (1) agent speaks exactly one filler phrase from the TOOL-CALL FILLER set ('One moment.' / 'Just a sec.' / 'Let me check that.') with nothing else AND (2) calls universal_router intent='confirm_time' with appointment_date='2026-06-17' and appointment_time='09:00' in the SAME response turn, per CONFIRMATION's filler-only rule. FAIL if agent speaks the appointment date, time, or practitioner name, says 'great', 'I'll book you in', 'you're booked', 'you're all set', or 'anything else?', speaks the filler without calling the tool, calls the tool without speaking, splits the phrase and tool call across two turns, or calls smart_voice_agent instead of universal_router."
+      "expected_behavior": "PASS if the agent calls universal_router intent='confirm_time' with appointment_date='2026-06-17', appointment_time='09:00', confirmed_time_spoken='9:00 AM' (or equivalent spoken form of the confirmed time), confirmed_day_spoken naming Wednesday the 17th, and practitioner_name='Sarah Jones' in the payload. Per the current CONFIRMATION design, the tool call may be silent or carry a short filler phrase in this same turn — do NOT fail solely for a missing or present filler phrase. FAIL if the agent speaks the full appointment recap in THIS turn (e.g. 'You're confirmed for 9am Wednesday with Sarah' before the tool result has returned), says 'you're booked'/'you're all set'/'anything else?', omits any of the three new spoken-form payload fields, or calls smart_voice_agent instead of universal_router."
+    },
+    {
+      "name": "C1B — Post-confirmation: speak confirm_time's message field verbatim, nothing added",
+      "tags": [
+        "core",
+        "confirmation-message-field"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to come in Wednesday morning"
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"found\": true, \"response_type\": \"availability\", \"session_id\": \"sess_abc\", \"first_available\": {\"practitioner_name\": \"Sarah Jones\", \"practitioner_id\": \"prac_1\", \"business_id\": \"biz_1\", \"business_name\": \"Northside Physio\", \"date\": \"2026-06-17\", \"day_of_week\": \"Wednesday\", \"time\": null}, \"practitioners\": [{\"practitioner_name\": \"Sarah Jones\", \"practitioner_id\": \"prac_1\", \"dates\": [{\"date\": \"2026-06-17\", \"slot_groups\": {\"morning\": [\"9:00 AM\", \"10:30 AM\"]}, \"business_id\": \"biz_1\", \"business_name\": \"Northside Physio\"}]}]}"
+        },
+        {
+          "role": "user",
+          "content": "9am works for me"
+        },
+        {
+          "role": "assistant",
+          "content": "One moment."
+        },
+        {
+          "role": "tool",
+          "content": "[universal_router response]: {\"status\": \"success\", \"message\": \"Great — you're confirmed for 9:00 AM on Wednesday the 17th with Sarah Jones.\", \"uni_router_intent\": \"confirm_time\"}"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's next spoken turn is exactly the tool result's message field, verbatim — 'Great — you're confirmed for 9:00 AM on Wednesday the 17th with Sarah Jones.' — with no tool call in this turn and nothing added or omitted (no 'anything else?', no restating the service name, no asking for name/email — those are a later node's job). FAIL if the agent paraphrases, drops, or embellishes the message field, or calls another tool in this turn."
     },
     {
       "name": "S1 — Slot count: exactly 2 times when band has 4 slots",
@@ -52,6 +86,45 @@
       "expected_behavior": "PASS if agent says 'Checking that now, one moment.' and calls smart_voice_agent with intent='asap_slots' and start_date equal to today's date from {{current_time_local}} (YYYY-MM-DD format). FAIL if agent calls intent='availability' without a date, calls intent='find_next_available', or speaks dates without calling the tool."
     },
     {
+      "name": "ASAP-D1 — Caller defers timing back to agent after TIMEFRAME QUESTION (regression repro)",
+      "history": [
+        {
+          "role": "assistant",
+          "content": "When would you like to come in?"
+        },
+        {
+          "role": "user",
+          "content": "When do you have time? Sorry."
+        }
+      ],
+      "expected_behavior": "PASS if the agent treats this as an ASAP/soonest request per CALLER DEFERS TO AGENT — speaks one TOOL-CALL FILLER phrase and calls smart_voice_agent intent='asap_slots' in the SAME turn. FAIL if the agent re-asks a timeframe question (e.g. 'When would suit you — today, tomorrow, or another day?') instead of calling the tool — this is the exact live-call regression being fixed.",
+      "tags": [
+        "core",
+        "asap-defer"
+      ]
+    },
+    {
+      "name": "ASAP-D2 — Caller defers with 'whatever works for you' as first reply",
+      "history": [
+        {
+          "role": "user",
+          "content": "I need a physio appointment."
+        },
+        {
+          "role": "assistant",
+          "content": "When would you like to come in?"
+        },
+        {
+          "role": "user",
+          "content": "Whatever works for you, honestly."
+        }
+      ],
+      "expected_behavior": "PASS if the agent speaks one TOOL-CALL FILLER phrase and calls smart_voice_agent intent='asap_slots' in the same turn. FAIL if it re-asks for a day/time or asks a clarifying question first.",
+      "tags": [
+        "asap-defer"
+      ]
+    },
+    {
       "name": "Y1 — Year anchor: date labelled and confirmed using current_time_local year, not training-data year",
       "history": [
         {
@@ -74,7 +147,7 @@
           "content": "Yes, 9am works"
         }
       ],
-      "expected_behavior": "PASS if the universal_router confirm_time payload has appointment_date='2026-06-22', matching the cached slot's date, per TIMEFRAME -> PARAMS ('read the year from {{current_time_local}} — never infer it'). FAIL if the year in the payload is 2025 or any year other than 2026. Per CONFIRMATION, spoken output is filler-only and will never contain the year — do not fail on absence of '2026' in speech."
+      "expected_behavior": "PASS if the universal_router confirm_time payload has appointment_date='2026-06-22', matching the cached slot's date, per TIMEFRAME -> PARAMS ('read the year from {{current_time_local}} — never infer it'), AND confirmed_day_spoken names Monday the 22nd (2026, not 2025 or any other year). FAIL if the year in appointment_date or confirmed_day_spoken is 2025 or any year other than 2026."
     },
     {
       "name": "W1 — Wrong intent: confirm with universal_router not smart_voice_agent",
@@ -100,7 +173,7 @@
           "content": "Yes, 8am please"
         }
       ],
-      "expected_behavior": "PASS if agent calls universal_router intent='confirm_time' (with filler-only spoken phrase per CONFIRMATION TOOL LOCK). FAIL if agent calls smart_voice_agent with any intent for confirmation — CONFIRMATION TOOL LOCK states this is a protocol violation."
+      "expected_behavior": "PASS if agent calls universal_router intent='confirm_time'. FAIL if agent calls smart_voice_agent with any intent for confirmation — CONFIRMATION TOOL LOCK states this is a protocol violation."
     },
     {
       "name": "ENTRY-1 — WHO IS IT FOR: caller names a specific third party directly, no confirm question",
@@ -1037,6 +1110,46 @@
         }
       ],
       "expected_behavior": "PASS if: agent treats this as a normal found result on Friday — asks which band the caller prefers (morning/afternoon), per BAND SELECTION — and does NOT call smart_voice_agent again, does NOT claim there is no availability, and does NOT mention Thursday at all (the exclusion was already handled server-side, nothing to reject). FAIL if agent re-searches, claims 'nothing available', or second-guesses the returned Friday date because Thursday was mentioned earlier in the conversation."
+    },
+    {
+      "name": "DIRECTIONAL TIME QUALIFIER — between, caller states window with later time first, must sort earlier/later regardless of spoken order (fleet-propagation of the 2026-08-19 Raymond Terrace Node 7b inverted-range fix)",
+      "tags": [
+        "core",
+        "qualifier-ordering"
+      ],
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Thursday, between five and four."
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks a filler phrase and calls smart_voice_agent with preferred_time_qualifier='between', preferred_time set to the EARLIER of the two times (4pm / '4:00 PM') and preferred_time_end set to the LATER of the two times (5pm / '5:00 PM') — regardless of which order the caller spoke them in (caller said 'five' before 'four'). FAIL if: preferred_time is set to the later time (5pm) and preferred_time_end to the earlier time (4pm) — an inverted range (min>max) that matches zero slots on any date."
+    },
+    {
+      "name": "QUALIFIER CLAUSE — found=false with preferred_time_qualifier set, generic (non-recurring-weekday) branch — apology must name the qualifier",
+      "tags": [
+        "core",
+        "qualifier-ordering"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Is there anything before 5 on Tuesday?"
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"found\": false, \"success\": true, \"session_id\": \"sess_abc\"}"
+        }
+      ],
+      "expected_behavior": "PASS if: agent's apology names the qualifier just sent on this search — something like 'I'm sorry, there's no availability before 5pm for that period. Would you like to try a different time?' FAIL if: agent says only 'I'm sorry, there's no availability for that period...' with no mention of the 'before 5' constraint the caller just stated — the QUALIFIER CLAUSE must be inserted, not silently dropped."
     }
   ]
 }

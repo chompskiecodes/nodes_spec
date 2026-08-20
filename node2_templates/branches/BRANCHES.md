@@ -1075,3 +1075,118 @@ DIRECT 9, DIRECT+WORKING 2, **RAW 34** (was 44) — 50 of 84 branches now templa
    (`n2_quotes.py`) now reports every quote-glyph flip in either direction. Result:
    **0 straight→curly, 21 curly→straight** — the generator now only ever removes smart
    quotes, never adds them.
+
+---
+
+## 10. SECOND MIGRATION PASS — 2026-08-19/20
+
+Supersedes §9's counts. **RAW 34 → 23; 62 of 85 branches now render from a template.**
+(§9's denominator was 84; the fleet has since gained `body_logic_remedial_myotherapy`.)
+
+Every migration in this pass was accepted only on **byte-exact round-trip through the real
+generator path** (`generate_node2.compose_branches`), and the whole pass was gated fleet-wide:
+a generated-body snapshot of all 29 in-scope clinics taken before the first edit is
+**character-for-character identical** to the snapshot taken after the last one — `CHANGED
+CLINICS: 0`, `TOTAL LOST = 0`, `TOTAL ADDED = 0`, `straight->curly 0`. `generate_node2.py
+--diff` then reports `SAME - byte-identical` for all 29 clinics, and `--dry-run` exits 0 with
+zero WARN/ERROR. **Zero characters of any clinic's prompt changed.**
+
+### What moved (12 branches)
+
+| Archetype | Branches |
+|---|---|
+| GATE | `intuitive_health_and_wellness` NATUROPATHY*, `totally_well` CLINICAL_LYMPHATIC / ADVANCED_LYMPHATIC / POST_SURGICAL |
+| GATE+DURATION | `intuitive_health_and_wellness` CHINESE_MEDICINE* |
+| DIRECT+WORKING | `cascade_womens_health` TELEHEALTH* |
+| **QUESTION+ROUTE** (new) | `speeding_health` MASSAGE_RACHEL / SPORTS_MASSAGE_GLEN, `totally_well` RELAXATION_MASSAGE |
+| **GATE+INLINE** (new) | `ryde_health` ACUPUNCTURE / CHIROPRACTIC / PHYSIOTHERAPY |
+
+`*` = needed a per-branch `patches` entry (see below).
+
+The `totally_well` trio had been filed under "Style A gate, outcome blocks off-template". That
+was true when written but is not any more: the `PRE_GATE_BYPASS` and `POST_OUTCOMES_BLOCK`
+slots added during §9's own generalisation pass are exactly the shape those branches need
+(a package-signal bypass ahead of the gate, and a package sub-step after the outcomes). They
+now render through the **unmodified** `_gate.txt` with no patches at all.
+
+### Two new archetypes, and the bar they had to clear
+
+A template whose slots are two arbitrary free-text blobs is *RAW with extra steps* — it owns no
+invariant, so a fleet-wide wording change still means editing N configs by hand. Both new
+templates were required to own something that actually changes fleet-wide:
+
+- **`_question_route.txt` (QUESTION+ROUTE)** — no new/existing gate at all: one disambiguating
+  question (duration / gender / delivery mode), then an inline `key -> working_type,
+  working_id` map whose entries **share one trailing call line**. Neither `_gate.txt` nor
+  `_gate_duration.txt` can render this: both hardcode the `{{booking_for}}` gate sentence, and
+  both give every outcome its own call line. The slot that earns the template is `CALL_LINE` —
+  that sentence is the single most change-prone line in the corpus (it already changed once
+  fleet-wide, in the `CONFIRM_SERVICE SILENT` -> `FILLER` migration), so it is owned explicitly
+  rather than buried inside a blob. This is precisely the "shared trailing call line" shape
+  §9 excluded from the GATE reword pass — correctly, since forcing it into GATE would have
+  restructured the instruction; a purpose-built archetype does not.
+- **`_gate_inline.txt` (GATE+INLINE)** — the gate expressed as a `TURN 1 — MANDATORY` spoken
+  instruction gated on `{{patient_status}}`, with each outcome calling `confirm_service`
+  through an **inline payload** instead of `working_type`/`working_id` vars. Distinct from
+  GATE on both counts. It owns a lot: the entire TURN-1 scaffold (including the explicit
+  `Do NOT call universal_router or backup_universal_router on this turn` line) and the full
+  payload skeleton with its `[+ CONTEXT PIGGYBACK: ...]` clause. The template was derived
+  *from* a real branch by tokenising it, so every fixed character is byte-faithful by
+  construction rather than by retyping.
+
+Both were held to a **>=3 member** bar, decided from a mechanical signature census of all 35
+RAW branches rather than from reading prose. The census is the reason no third archetype was
+added: outside these two clusters the distribution is a long tail of **20 signatures with
+exactly one member** — differing in question style, outcome-head style (`2.` vs `2a.`),
+`working_type` indent (3 / 4 / 5 / 7 spaces), per-outcome vs shared call lines, and nesting
+depth. A template spanning those would own nothing.
+
+### `patches` used instead of reshaping a shared template
+
+Three mechanical wrapper deviations were absorbed per-branch, because reshaping either gate
+template would have forced all 30 already-migrated GATE/GATE+DURATION branches to change with
+it — a large blast radius for a cosmetic difference, and one this doc's own concurrency
+warnings argue against taking on:
+
+- **NOPAREN** (`NATUROPATHY`, `CHINESE_MEDICINE`) — the gate line carries no `("question")`
+  parenthetical; those clinics keep the question text only in their own `## TEMPLATES` section.
+- **NOBLANK** (`CHINESE_MEDICINE`) — no blank line between the `###` heading and step 1.
+- **no-blank-before-working-vars** (`TELEHEALTH`) — the working-var block runs straight on from
+  the CONCERN-GUIDED line.
+
+### Archetype fit is enforced separately from round-trip — and it rejected a branch
+
+`body_logic_remedial_myotherapy` MYOTHERAPY_REMEDIAL_MASSAGE round-trips byte-exact through
+`_gate_duration.txt`, and was **still rejected**. Its real shape is gate -> 3-way patient status
+(new / existing / existing-elsewhere, via a location follow-up) -> per-status duration question
+-> 8 appointment types, across five top-level steps. GATE+DURATION's free-form
+`POST_OUTCOMES_BLOCK` will silently swallow steps 4-5, leaving `OUTCOME_A`/`OUTCOME_B` bound to
+what are really dispatch steps — a branch that renders perfectly while its slot names lie about
+what they hold. Per §9's own rule, *RAW with a misleading label is worse than RAW*. A mechanical
+guard now enforces this: any further top-level numbered step after the two outcomes is a hard
+reject. It is the only branch the guard currently catches, and it stays RAW deliberately.
+
+### The 23 still on RAW
+
+| # | Where | Why |
+|---|---|---|
+| 6 | `intuitive_health_and_wellness` HOLISTIC_EXPAND, CHIROPRACTIC, MASSAGE, BREATHWORK, EFT_MATRIX, REIKI | HOLISTIC_EXPAND is a redirect stub and CHIROPRACTIC is a §6 `patches` candidate (both unchanged from the design study); EFT_MATRIX is a redirect-then-route flow with its own `wrap_up` branch; MASSAGE/BREATHWORK/REIKI each carry 3+ outcome blocks with a *nested* question and map inside each. |
+| 3 | `raymond_terrace_and_tea_gardens_osteopaths` STANDARD, DVA_TYPE, EPC_TYPE | Location-keyed, with `working_business_id`/`working_business_name` pairs; EPC_TYPE nests a second sub-question inside one location outcome. DVA_TYPE alone would fit a question+per-outcome template — a single member, below the bar. |
+| 3 | `ryde_health` OSTEOPATHY, MASSAGE, PILATES_CONDITIONING | OSTEOPATHY forks on an already-known `practitioner_preference` (§6 `patches` candidate); MASSAGE and PILATES have nested group/private and `####` sub-structure. |
+| 3 | `totally_well` LYMPHATIC_DISAMBIGUATION, FASCIA, PACKAGES | §6 `patches` candidate, plus two `2a.`/`2b.`-style multi-outcome shapes. |
+| 3 | `luminance_health`, `sports_therapy_by_andy`, `sydney_spine` | Whole-flow blocks, not category branches (the Family D fold). **Correctly RAW permanently.** |
+| 5 | `body_logic` MYOTHERAPY_REMEDIAL_MASSAGE, `cascade` HYDROTHERAPY, `meraki` LYMPHATIC_DRAINAGE, `speeding` FREE_CONSULTATION, `yandina` SPORTS_INJURY | Singleton shapes (see the census above) — each would need its own bespoke archetype. |
+
+None is an unexplained leftover, and the remaining tail is now genuinely structural rather than
+merely unattempted: every one of the 23 was mechanically tested against all seven archetypes
+and rejected with a specific, recorded reason.
+
+### Gate tooling was rebuilt, and belongs in the repo
+
+§9's gates (`n2_loss.py`, `n2_added.py`, `n2_quotes.py`, `n2_cmp_configs.py`) were throwaway
+scratchpad scripts and no longer exist. They were rebuilt for this pass as a single
+snapshot-and-compare pair: render every clinic's body without touching disk, then diff two
+snapshots for changed clinics, lost lines, added lines, and quote-glyph flips in both
+directions. Rebuilding a verification harness from scratch each time is how a gate quietly
+stops being run — worth landing this one under `nodes/node2_templates/` or `scripts/` rather
+than leaving the next pass to rediscover it a third time.

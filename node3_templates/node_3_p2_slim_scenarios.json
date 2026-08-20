@@ -12,6 +12,65 @@
       "expected_behavior": "PASS if agent asks which practitioner the caller prefers (e.g. 'Did you want to book with Alice Brown or James Lee, or is anyone fine?') before asking about location or timeframe. FAIL if agent asks 'Which location works for you?' or 'When would you like to come in?' before the practitioner question fires — ROUTING TABLE row 1 (PRACTITIONER PREFERENCE) must evaluate first."
     },
     {
+      "name": "ASAP-D1 — Caller defers timing back to agent after TIMEFRAME QUESTION (regression repro)",
+      "history": [
+        {
+          "role": "user",
+          "content": "I need a chiro appointment, anyone is fine"
+        },
+        {
+          "role": "assistant",
+          "content": "Which location works for you — North Sydney or Parramatta?"
+        },
+        {
+          "role": "user",
+          "content": "North Sydney"
+        },
+        {
+          "role": "assistant",
+          "content": "When would you like to come in?"
+        },
+        {
+          "role": "user",
+          "content": "When do you have time? Sorry."
+        }
+      ],
+      "expected_behavior": "PASS if the agent treats this as an ASAP/soonest request per CALLER DEFERS TO AGENT — speaks one TOOL-CALL FILLER phrase and calls smart_voice_agent intent='asap_slots' in the SAME turn. FAIL if the agent re-asks a timeframe question (e.g. 'When would suit you — today, tomorrow, or another day?') instead of calling the tool — this is the exact live-call regression being fixed.",
+      "tags": [
+        "core",
+        "asap-defer"
+      ]
+    },
+    {
+      "name": "ASAP-D2 — Caller defers with 'whatever works for you' as first reply",
+      "history": [
+        {
+          "role": "user",
+          "content": "I need a chiro appointment, anyone is fine"
+        },
+        {
+          "role": "assistant",
+          "content": "Which location works for you — North Sydney or Parramatta?"
+        },
+        {
+          "role": "user",
+          "content": "North Sydney"
+        },
+        {
+          "role": "assistant",
+          "content": "When would you like to come in?"
+        },
+        {
+          "role": "user",
+          "content": "Whatever works for you, honestly."
+        }
+      ],
+      "expected_behavior": "PASS if the agent speaks one TOOL-CALL FILLER phrase and calls smart_voice_agent intent='asap_slots' in the same turn. FAIL if it re-asks for a day/time or asks a clarifying question first.",
+      "tags": [
+        "asap-defer"
+      ]
+    },
+    {
       "name": "C1 — Confirmation: exact-match time — filler phrase ONLY AND universal_router confirm_time in same response",
       "history": [
         {
@@ -922,6 +981,106 @@
         }
       ],
       "expected_behavior": "PASS if: agent offers Friday's afternoon slots (per SLOT OFFER HARD RULE, first and last) with Bruce Sutton, and does NOT call smart_voice_agent again, does NOT claim there is no availability, and does NOT mention Thursday. FAIL if agent re-searches, claims 'nothing available', or second-guesses the returned Friday date."
+    },
+    {
+      "name": "PS-1 — Practitioner switch mid-offer, not cached (regression repro: live call spoke a needless availability blurb instead of just calling the tool)",
+      "history": [
+        {
+          "role": "user",
+          "content": "Tomorrow?"
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "assistant",
+          "content": "I have morning availability on Thursday, August 20th at ten AM or eleven twenty AM with Elisa at Raymond Terrace — does either of those work for you?"
+        },
+        {
+          "role": "user",
+          "content": "I'm looking to go with Bruce."
+        }
+      ],
+      "expected_behavior": "PASS if the agent's ONLY spoken content is a single filler phrase (e.g. \"Let me check that.\") followed immediately by a smart_voice_agent call carrying Bruce's practitioner_id (resolved via {{practitioners_with_ids}}), same day/band as the existing search. FAIL if the agent speaks any confirmatory or explanatory sentence about Bruce (e.g. \"Bruce is available for new patient appointments… let me check\") before or instead of the filler+tool-call pattern — this is the exact live-call defect being fixed.",
+      "tags": [
+        "practitioner-switch"
+      ]
+    },
+    {
+      "name": "PS-2 — Practitioner named matches one already offered — acceptance, not a switch",
+      "history": [
+        {
+          "role": "user",
+          "content": "Whoever's free, this week."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "assistant",
+          "content": "I've got 10 AM or 11 AM with Elisa, and 2 PM with Bruce at Raymond Terrace — who works better?"
+        },
+        {
+          "role": "user",
+          "content": "Bruce."
+        }
+      ],
+      "expected_behavior": "PASS if the agent treats this as accepting Bruce from the MULTI-PRACTITIONER offer just made — stores confirmed_practitioner/confirmed_practitioner_id from Bruce's entry in the cached result and re-applies SLOT OFFER (SINGLE-PRACTITIONER path) with NO tool call. FAIL if the agent treats this as a PRACTITIONER SWITCH and fires a fresh smart_voice_agent search — Bruce was already in the offer, so his cached slot is already known and a re-search is wasted and wrong.",
+      "tags": [
+        "practitioner-switch"
+      ]
+    },
+    {
+      "name": "PS-3 — Practitioner switch to someone with cached-but-unoffered times — no tool call needed",
+      "history": [
+        {
+          "role": "user",
+          "content": "Whoever's free, this week."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "assistant",
+          "content": "I've got 10 AM or 11 AM with Elisa, and 2 PM with Bruce at Raymond Terrace — who works better?"
+        },
+        {
+          "role": "user",
+          "content": "Actually is Dr Nguyen free that morning?"
+        }
+      ],
+      "expected_behavior": "PASS if Dr Nguyen also has times in confirmed_band/confirmed_day in the cached tool result (assume the practitioners array in the last result includes a third practitioner with morning slots that just wasn't named in the two-way offer) and the agent goes directly to SLOT OFFER (SINGLE-PRACTITIONER path) for Dr Nguyen with NO tool call. FAIL if the agent calls smart_voice_agent when the cache already has the answer, or if it narrates Dr Nguyen's services before offering times.",
+      "tags": [
+        "practitioner-switch"
+      ]
+    },
+    {
+      "name": "PS-4 — Practitioner switch with an ambiguous name mid-offer",
+      "history": [
+        {
+          "role": "user",
+          "content": "Tomorrow?"
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "assistant",
+          "content": "I have morning availability on Thursday, August 20th at ten AM or eleven twenty AM with Elisa at Raymond Terrace — does either of those work for you?"
+        },
+        {
+          "role": "user",
+          "content": "Can I see Dithu instead?"
+        }
+      ],
+      "expected_behavior": "PASS if {{practitioners_with_ids}} in this scenario is assumed to contain two distinct people both named Dithu, and the agent asks \"Did you mean [full name A] or [full name B]?\" with NO tool call and nothing else spoken. FAIL if the agent guesses which Dithu, or calls the tool before disambiguating.",
+      "tags": [
+        "practitioner-switch"
+      ]
     }
   ]
 }

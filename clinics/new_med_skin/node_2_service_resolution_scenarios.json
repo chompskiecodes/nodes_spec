@@ -1,32 +1,122 @@
 {
-  "_comment": "Tests New Med Skin's mandatory new patient consultation script (spoken + tool in same turn), VARIANT-FIRST for FACIAL_VOLUME sub-type, and SERVICE ALIAS QUICK-MATCH preventing false not-offered for 'botox'.",
+  "_comment": "Node 2 Family B (GATE_FIRST) scenario battery for new_med_skin. Tests STEP 0 PATIENT STATUS DECISION TREE firing before all other logic, the new-patient mandatory verbatim script (spoken + confirm_service in ONE turn), the existing-patient path into STEP 1 CATEGORY RESOLUTION, CONFIRM_SERVICE FILLER RULE (one filler phrase, never fully silent), VARIANT-FIRST, third-party gate wording, escapes (cancel/wrap_up/info), timeframe_raw survival, MENU_LIST / NOT_OFFERED, and the reschedule re-entry guard. Scenarios carrying a 'dv' object state the resolved dynamic-variable values in force at that point in the call; scenarios without one assume all DVs empty/unset.",
   "scenarios": [
     {
-      "name": "New patient — mandatory spoken script + confirm_service in same turn",
+      "name": "STEP0-1 gate fires first - service named, no patient_status yet",
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to book in for a LED light therapy session please."}
+      ],
+      "expected_behavior": "PASS if agent's entire turn is the spoken gate question 'Have you been to the clinic before?' (a brief warmth opener of four words or fewer before it is acceptable) with NO tool call of any kind. FAIL if the agent calls universal_router (any intent) this turn, asks about date/time/location, outputs MENU_LIST, or resolves LED to an appointment type before the gate is answered."
+    },
+    {
+      "name": "STEP0-2 new patient - mandatory verbatim script + confirm_service in SAME turn",
       "history": [
         {"role": "user", "content": "I'd like to book a PRF appointment."},
         {"role": "assistant", "content": "Have you been to the clinic before?"},
         {"role": "user", "content": "No, it's my first time."}
       ],
-      "expected_behavior": "PASS if agent speaks 'As you're new, I'll need to set you up for a new patient consultation first -- Dr Leoni will guide the best course of action from there.' AND calls universal_router intent='confirm_service' with appointment_type='Consultation For New Patients' in the SAME turn. FAIL if agent speaks the script without the tool call, calls the tool without the script, or asks any other question."
+      "expected_behavior": "PASS if agent speaks VERBATIM 'As you're new, I'll need to set you up for a new patient consultation first -- Dr Leoni will guide the best course of action from there.' AND calls universal_router intent='confirm_service' with payload appointment_type_id='1480843963127571628', appointment_type='Consultation For New Patients', patient_status='new' in the SAME turn. FAIL if agent speaks the script without the tool call, calls the tool without the script, adds a separate filler phrase before the script, books PRF instead, or asks any further question."
     },
     {
-      "name": "Botox alias — must resolve to Wrinkles and Lines, not not-offered",
+      "name": "STEP0-3 symptom on gate turn - empathy line THEN gate question, spoken only",
+      "history": [
+        {"role": "user", "content": "My skin has been really dry and flaky lately, I want to get something done about it."}
+      ],
+      "expected_behavior": "PASS if agent's turn contains BOTH (1) one brief empathetic line and (2) the gate question 'Have you been to the clinic before?', spoken only, with NO tool call. FAIL if the empathy line is missing, if the gate question is missing, if the agent calls universal_router this turn, or if the agent resolves a skin category before asking the gate."
+    },
+    {
+      "name": "STEP0-4 third-party - gate must use OTHER wording",
+      "history": [
+        {"role": "user", "content": "I want to book a skin peel for my wife Sarah."}
+      ],
+      "expected_behavior": "PASS if agent asks 'Have they been to the clinic before?' (the OTHER wording), spoken only, no tool call. FAIL if the agent asks 'Have YOU been to the clinic before?', asks the SKIN_PEELS variant question before the gate, or calls any tool this turn."
+    },
+    {
+      "name": "EXIST-1 botox alias - resolves to Wrinkles & Lines with filler phrase, not NOT_OFFERED",
       "history": [
         {"role": "user", "content": "I'd like to book a botox appointment."},
         {"role": "assistant", "content": "Have you been to the clinic before?"},
         {"role": "user", "content": "Yes, I've been before."}
       ],
-      "expected_behavior": "PASS if agent calls universal_router intent='confirm_service' silently with appointment_type='Wrinkles & Lines', appointment_type_id='1706874590543750904'. FAIL if agent says 'we don't offer botox', routes to info_pivot, or uses any appointment type ID other than 1706874590543750904."
+      "expected_behavior": "PASS if agent speaks exactly one short filler phrase from the TOOL-CALL FILLER set (e.g. 'One moment.') and in the SAME turn calls universal_router intent='confirm_service' with appointment_type='Wrinkles & Lines' and appointment_type_id='1706874590543750904'. FAIL if the agent says 'we don't offer botox', routes to info_pivot, uses any other appointment_type_id, produces a fully silent zero-text tool call, or speaks anything beyond the single filler phrase (no acknowledgement, no announcing the booking)."
     },
     {
-      "name": "Filler — VARIANT-FIRST must ask Contouring or Reversal before routing",
+      "name": "EXIST-2 filler - VARIANT-FIRST asks the variant question, spoken only",
       "history": [
         {"role": "user", "content": "I'd like to book a filler appointment."},
         {"role": "assistant", "content": "Have you been to the clinic before?"},
         {"role": "user", "content": "Yes, been before."}
       ],
-      "expected_behavior": "PASS if agent asks 'Were you after a Facial Contouring and Volume consultation, or a Filler Reversal consultation?' as a spoken-only turn. FAIL if agent routes to either sub-type without asking the variant question, or calls confirm_service silently."
+      "expected_behavior": "PASS if agent asks 'Were you after a Facial Contouring and Volume consultation, or a Filler Reversal consultation?' as a spoken-only turn with no tool call. FAIL if agent routes to either sub-type without asking, calls confirm_service this turn, or outputs MENU_LIST."
+    },
+    {
+      "name": "EXIST-3 variant answered - SCAN C maps to Filler Reversal id with filler phrase",
+      "history": [
+        {"role": "user", "content": "I'd like to book a filler appointment."},
+        {"role": "assistant", "content": "Have you been to the clinic before?"},
+        {"role": "user", "content": "Yes, been before."},
+        {"role": "assistant", "content": "Were you after a Facial Contouring and Volume consultation, or a Filler Reversal consultation?"},
+        {"role": "user", "content": "The reversal one please, I want some dissolved."}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase and calls universal_router intent='confirm_service' with appointment_type='Consultation for Filler Reversal' and appointment_type_id='1546836301691495818' in the same turn. FAIL if it uses 1706888090540320507 (the contouring id), re-asks the variant question, produces a fully silent tool call, or speaks any extra sentence."
+    },
+    {
+      "name": "EXIST-4 timeframe_raw survives the gate into the confirm_service payload",
+      "history": [
+        {"role": "user", "content": "Can I get in for LED light therapy next Tuesday afternoon?"},
+        {"role": "assistant", "content": "Have you been to the clinic before?"},
+        {"role": "user", "content": "Yeah I've been in before."}
+      ],
+      "expected_behavior": "PASS if agent speaks one filler phrase and calls universal_router intent='confirm_service' with appointment_type_id='1649827716951713108' AND a timeframe_raw field in the payload carrying the caller's 'next Tuesday afternoon' reference. FAIL if timeframe_raw is omitted from the payload, if the agent re-asks for a day/time, or if the wrong appointment_type_id is used."
+    },
+    {
+      "name": "EXIST-5 MENU_LIST verbatim with zero preamble when caller is unsure",
+      "history": [
+        {"role": "user", "content": "I want to make an appointment."},
+        {"role": "assistant", "content": "Have you been to the clinic before?"},
+        {"role": "user", "content": "Yes I have. I'm not really sure what I need though."}
+      ],
+      "expected_behavior": "PASS if agent outputs the MENU_LIST phrase starting with 'We offer consultations for Autologous Platelet Rich Fibrin, ...' with ZERO preamble text before it and no tool call. FAIL if any words precede the MENU_LIST phrase (e.g. 'Sure -', 'No problem,', 'What brings you in'), if the list is paraphrased or truncated, or if a tool is called."
+    },
+    {
+      "name": "EXIST-6 NOT_OFFERED for a service this clinic does not provide",
+      "history": [
+        {"role": "user", "content": "Do you do laser hair removal? I'd like to book that."},
+        {"role": "assistant", "content": "Have you been to the clinic before?"},
+        {"role": "user", "content": "Yes, I've been in before."}
+      ],
+      "expected_behavior": "PASS if agent speaks the NOT_OFFERED (first use) template: \"We don't offer laser hair removal here.\" followed by the full service list and 'Would you like to book one of those?', spoken only, no tool call. FAIL if the agent invents a laser appointment type, maps it to any existing category (LED, Liftera, peels), calls confirm_service, or routes to info_pivot."
+    },
+    {
+      "name": "ESC-1 cancel escape mid-resolution",
+      "history": [
+        {"role": "user", "content": "I'd like to book a skin peel."},
+        {"role": "assistant", "content": "Have you been to the clinic before?"},
+        {"role": "user", "content": "Actually forget it - I need to cancel the appointment I've already got."}
+      ],
+      "expected_behavior": "PASS if agent speaks exactly one filler phrase and calls universal_router intent='cancel_intent' with called_number and caller_id in the same turn. FAIL if it calls confirm_service, continues the gate/peel resolution, asks which appointment to cancel, or claims the appointment was cancelled."
+    },
+    {
+      "name": "ESC-2 wrap_up when caller ends the call",
+      "history": [
+        {"role": "user", "content": "I was going to book something but I'll sort it out later. That's all, thanks - bye."}
+      ],
+      "expected_behavior": "PASS if agent speaks one short closing/filler phrase and calls universal_router intent='wrap_up' with called_number and caller_id. FAIL if it asks the gate question, calls confirm_service, or ends with spoken text and no tool call."
+    },
+    {
+      "name": "ESC-3 info pivot for a general clinic question",
+      "history": [
+        {"role": "user", "content": "Before I book anything - what are your opening hours on Saturdays?"}
+      ],
+      "expected_behavior": "PASS if agent speaks one filler phrase and calls universal_router intent='info_pivot' with called_number and caller_id. FAIL if the agent states any opening hours itself, asks the patient-status gate instead, or calls confirm_service."
+    },
+    {
+      "name": "GUARD-1 reschedule re-entry - skip the gate, go straight to category resolution",
+      "dv": {"reschedule_mode": "true", "appointment_type_id": "none", "patient_status": "", "patient_lookup_done": ""},
+      "history": [
+        {"role": "user", "content": "I'd like to move my appointment to a different treatment - can I do a HIFU session instead?"}
+      ],
+      "expected_behavior": "PASS if agent does NOT ask 'Have you been to the clinic before?' and instead treats the caller as existing: speaks one filler phrase and calls universal_router intent='confirm_service' with appointment_type='Liftera - HIFU - Facial & Neck', appointment_type_id='1709882585678620111'. FAIL if the patient-status gate question is asked, or if the agent outputs MENU_LIST despite HIFU being a clear quick-match term."
     }
   ]
 }
