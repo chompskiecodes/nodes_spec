@@ -197,27 +197,27 @@ def generate_tests(fixtures: dict) -> list:
             _m("agent", "One moment.", 27),
             _m("agent",
                '[universal_router response]: {"status": "success", '
-               '"message": "Great — you\'re confirmed for 9:00 AM on Wednesday the 8th with Dithu Beeram.", '
+               '"message": "Great — 9:00 AM on Wednesday the 8th with Dithu Beeram it is.", '
                '"uni_router_intent": "confirm_time"}',
                28),
         ],
         "success_condition": (
             "PASS if the agent's next spoken turn is exactly the tool result's message field, "
-            "verbatim — \"Great — you're confirmed for 9:00 AM on Wednesday the 8th with Dithu "
-            "Beeram.\" — with NO tool call in this turn, and nothing added or omitted: no opening "
-            "word of its own ('Perfect,', 'So,'), no 'anything else?', no restating the service "
-            "name, no asking for name/email (those belong to a later node). "
+            "verbatim — \"Great — 9:00 AM on Wednesday the 8th with Dithu Beeram it is.\" — with "
+            "NO tool call in this turn, and nothing added or omitted: no opening word of its own "
+            "('Perfect,', 'So,'), no 'anything else?', no restating the service name, no asking "
+            "for name/email (those belong to a later node). "
             "FAIL if the agent paraphrases, drops, or embellishes the message field, adds its own "
             "opening acknowledgement on top of the message field's own 'Great —', asks a follow-up "
             "question, or calls any tool in this turn."
         ),
         "success_examples": [
-            _ok("Great — you're confirmed for 9:00 AM on Wednesday the 8th with Dithu Beeram."),
+            _ok("Great — 9:00 AM on Wednesday the 8th with Dithu Beeram it is."),
         ],
         "failure_examples": [
-            _fail("Perfect! Great — you're confirmed for 9:00 AM on Wednesday the 8th with Dithu Beeram."),
+            _fail("Perfect! Great — 9:00 AM on Wednesday the 8th with Dithu Beeram it is."),
             _fail("You're all set for 9am Wednesday with Dithu. Anything else?"),
-            _fail("Great — you're confirmed for 9:00 AM on Wednesday the 8th with Dithu Beeram. "
+            _fail("Great — 9:00 AM on Wednesday the 8th with Dithu Beeram it is. "
                   "[also calls a tool]"),
         ],
     })
