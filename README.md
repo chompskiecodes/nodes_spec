@@ -220,7 +220,8 @@ service resolution; `_c_visit_type.txt` — linear visit-type/billing-type flow,
 composer (`nodes/node2_templates/branches/`) for the variable-length per-category booking logic.
 `scripts/node2_configs.py` holds each clinic's family + slot overrides + patches; regenerate via
 `scripts/generate_node2.py` (wired into `fast_patch.py`, same as Node 1/3/8). `EXCLUDED_CLINICS`
-(`mri_first`) is hand-maintained. See `.claude/rules/node2-template-builder-plan.md` for the full
+is currently empty — every clinic runs through the generator; `mri_first` was the only past
+exception and was retired 2026-08-24. See `docs/node2-template-builder-plan.md` for the full
 design/migration history and `nodes/node2_templates/branches/BRANCHES.md` for branch-archetype
 detail.
 
