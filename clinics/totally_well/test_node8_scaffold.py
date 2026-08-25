@@ -76,18 +76,16 @@ _DYNAMIC_VAR_PLACEHOLDERS = {
         "Remedial Massage, Relaxation Massage, Clinical Lymphatic Drainage, "
         "Advanced Lymphatic Therapies, Lymphoedema & Lipoedema Management, "
         "Post Surgical Care, Naturopathy, Pregnancy, "
-        "Fascia & Cellulite Treatments, Craniosacral Therapy, "
-        "Sports & Deep Tissue Rehab"
+        "Fascia & Cellulite Treatments, Craniosacral Therapy"
     ),
     "location_addresses": (
         "Totally Well=Shop 4, 18 Robina Town Centre Drive, Robina QLD 4226"
     ),
     "practitioners_comma": (
-        "Bartosz Kulikowski, Renee Fujimoto, Rosario Fernandez, "
+        "Renee Fujimoto, Rosario Fernandez, "
         "Ruby De Paulo, Tanya Ly"
     ),
     "practitioner_services": (
-        "Bartosz Kulikowski=Deep Tissue/Sports Massage & Rehab, "
         "Renee Fujimoto=Remedial Massage - Standard Appointment, "
         "Rosario Fernandez=Return Appointment _ Clinical Lymphatic Drainage, "
         "Ruby De Paulo=Remedial Massage - Standard Appointment, "
@@ -98,7 +96,6 @@ _DYNAMIC_VAR_PLACEHOLDERS = {
     "massage_survey_result": "",
     "service_ids": (
         "Deep Tissue Massage=1938457516237136921, "
-        "Deep Tissue/Sports Massage & Rehab=1938451578646176789, "
         "Osteopathic Remedial Therapy=1750384331878049213, "
         "Remedial Massage - First Visit=1706185375103329858, "
         "Remedial Massage - Long appointment=1706185901446538819, "
@@ -176,7 +173,7 @@ def generate_tests() -> List[Dict]:
         ],
         "failure_examples": [
             _fail("We have availability at 9 AM and 11 AM this morning."),
-            _fail("Deep tissue is available at 10 AM this morning with Bartosz."),
+            _fail("Deep tissue is available at 10 AM this morning with Ruby."),
         ],
     })
 
@@ -247,7 +244,7 @@ def generate_tests() -> List[Dict]:
         "chat_history": [
             _m("assistant",
                "Deep Tissue Massage is next available Saturday morning at 10 AM or 11 AM "
-               "with Bartosz. Craniosacral Therapy is Saturday afternoon at 1:10 PM or "
+               "with Ruby. Craniosacral Therapy is Saturday afternoon at 1:10 PM or "
                "2:20 PM with Tanya. Is there anything else I can help you with?",
                2),
             _m("user", "I'll book the deep tissue please.", 8),
@@ -312,7 +309,7 @@ def generate_tests() -> List[Dict]:
         "chat_history": [
             _m("assistant",
                "Yes, Remedial Massage is available in 45, 60, and 90-minute sessions "
-               "with Bartosz, Renee, Rosario, and Ruby. "
+               "with Renee, Rosario, and Ruby. "
                "Is there anything else I can help you with?",
                2),
             _m("user", "I'd like to book please.", 7),
@@ -506,14 +503,12 @@ def generate_tests() -> List[Dict]:
             _m("user", "Do you take private health insurance?", 3),
         ],
         "success_condition": (
-            "Agent says yes, most services are eligible through HICAPS, "
-            "and notes that Sports & Deep Tissue services with Bartosz are "
-            "not HICAPS-claimable. Ends with closing line. No tool call."
+            "Agent says yes, all services are eligible through HICAPS. "
+            "Ends with closing line. No tool call."
         ),
         "success_examples": [
-            _ok("Yes, most services are eligible for private health insurance rebates "
-                "through HICAPS. Note that Sports and Deep Tissue services with Bartosz "
-                "are not HICAPS-claimable. Is there anything else I can help you with?"),
+            _ok("Yes, all our services are eligible for private health insurance rebates "
+                "through HICAPS. Is there anything else I can help you with?"),
         ],
         "failure_examples": [
             _fail("[calls any tool]"),

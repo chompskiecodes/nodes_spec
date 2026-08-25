@@ -68,15 +68,14 @@ _DYNAMIC_VAR_PLACEHOLDERS = {
     "wrap_routing_flag":       "",
     "practitioner_genders":    "",
     "practitioners_comma": (
-        "Bartosz Kulikowski, Renee Fujimoto, Rosario Fernandez, "
+        "Renee Fujimoto, Rosario Fernandez, "
         "Ruby De Paulo, Tanya Ly"
     ),
     "service_categories": (
         "Remedial Massage, Relaxation Massage, Clinical Lymphatic Drainage, "
         "Advanced Lymphatic Therapies, Lymphoedema & Lipoedema Management, "
         "Post Surgical Care, Naturopathy, Pregnancy, "
-        "Fascia & Cellulite Treatments, Craniosacral Therapy, "
-        "Sports & Deep Tissue Rehab"
+        "Fascia & Cellulite Treatments, Craniosacral Therapy"
     ),
 }
 
