@@ -1,0 +1,78 @@
+{
+  "_comment": "Tests the P3->P2 pattern correction (2026-08-25): clinic has 2 real active Cliniko businesses (Richmond=27609, Melbourne=70414) instead of the old hardcoded Richmond-only location. Targets LOCATION step ordering and the deliberate absence of any per-practitioner location-restriction shortcut (Karen Fortunato / Lauren Walkley are Richmond-only in Cliniko, but Node 3 must not hardcode that — it always asks LOCATION like any other P2 clinic).",
+  "scenarios": [
+    {
+      "name": "LOCATION QUESTION fires after practitioner resolves, before timeframe",
+      "tags": ["core", "location"],
+      "history": [
+        {"role": "assistant", "content": "Did you want to book with Clarence Ho or Anthony Lugara, or is anyone fine?"},
+        {"role": "user", "content": "Anthony's fine."}
+      ],
+      "expected_behavior": "PASS if the agent's entire response is the LOCATION question naming both locations, e.g. 'Which location works for you — Richmond or Melbourne, or is any location fine?' with no tool call. FAIL if the agent skips straight to the TIMEFRAME QUESTION ('When would you like to come in?') without asking location, or calls smart_voice_agent before location and timeframe are both resolved."
+    },
+    {
+      "name": "Caller explicitly names Melbourne — resolves silently and moves to timeframe",
+      "tags": ["core", "location"],
+      "history": [
+        {"role": "assistant", "content": "Which location works for you — Richmond or Melbourne, or is any location fine?"},
+        {"role": "user", "content": "Melbourne please."}
+      ],
+      "expected_behavior": "PASS if the agent asks the TIMEFRAME QUESTION next (e.g. 'When would you like to come in?') with no re-ask of location and no tool call yet. FAIL if the agent asks about location again, calls a tool before a timeframe is known, or fails to treat 'Melbourne' as resolving confirmed_location."
+    },
+    {
+      "name": "Karen Fortunato named (Richmond-only in Cliniko) — LOCATION still asked, no hardcoded shortcut",
+      "tags": ["core", "location"],
+      "history": [
+        {"role": "assistant", "content": "Did you want to book with Karen Fortunato or Clarence Ho, or is anyone fine?"},
+        {"role": "user", "content": "Karen, please."}
+      ],
+      "expected_behavior": "PASS if the agent's entire response is the LOCATION question naming both Richmond and Melbourne, exactly as it would for any other practitioner — with no tool call. FAIL if the agent silently assumes Richmond (skipping the location question), auto-fills confirmed_location without asking, or otherwise treats Karen as implying a single location."
+    },
+    {
+      "name": "SINGLE-PRACTITIONER 2+ times count/discard, band scope (live regression 2026-08-25)",
+      "tags": ["core", "slot-offer-band-scope"],
+      "tool_result": {
+        "practitioners": [
+          {
+            "practitioner_id": "1937342822327780464",
+            "practitioner_name": "Amir",
+            "business_id": "27609",
+            "business_name": "Richmond",
+            "dates": [
+              {
+                "date": "2026-08-26",
+                "day_of_week": "Wednesday, August 26th",
+                "slot_groups": {
+                  "afternoon": ["2 PM", "2:15 PM", "2:30 PM", "2:45 PM", "3 PM", "3:15 PM", "3:30 PM", "4:45 PM"],
+                  "evening": ["5 PM"]
+                }
+              }
+            ]
+          },
+          {
+            "practitioner_id": "40382",
+            "practitioner_name": "Clarence",
+            "business_id": "27609",
+            "business_name": "Richmond",
+            "dates": [
+              {
+                "date": "2026-08-26",
+                "day_of_week": "Wednesday, August 26th",
+                "slot_groups": {
+                  "morning": ["9 AM", "9:15 AM", "10:15 AM"]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "history": [
+        {"role": "assistant", "content": "I've got availability tomorrow, Wednesday the 26th. Which location works for you — Melbourne or Richmond?"},
+        {"role": "user", "content": "richmond"},
+        {"role": "assistant", "content": "Perfect. I have several times available with our Richmond practitioners tomorrow. Would you prefer morning or afternoon?"},
+        {"role": "user", "content": "afternoon"}
+      ],
+      "expected_behavior": "PASS only if the agent's entire response names exactly two times — 2 PM and 4:45 PM (first and last of the afternoon band) — and says nothing about any other cached time, and does not mention the evening band or the 5 PM slot at all. A response like 'I've got 2 PM, 2:15 PM, ... or 5 PM in the afternoon and evening' (reciting every cached time and/or naming a second band) is a FAIL — this is the exact live regression this fix targets. Only Amir has afternoon-band times (Clarence has morning only), so this is the SINGLE-PRACTITIONER path with confirmed_band=afternoon; the response should read like 'I've got 2 PM or 4:45 PM with Amir at Richmond — does either of those work for you?' (LOCATION ANNOUNCEMENT applies as this is the first slot offer of the call)."
+    }
+  ]
+}
