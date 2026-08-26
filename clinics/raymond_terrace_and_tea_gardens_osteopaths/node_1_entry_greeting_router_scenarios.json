@@ -44,6 +44,205 @@
         }
       ],
       "expected_behavior": "PASS if: agent proceeds into the LEAVE MESSAGE MESSAGE STEP by asking 'What would you like me to pass on?' with zero tool call this turn. FAIL if: agent treats 'Yes please' as ambiguous and asks a clarifying question instead — the AMBIGUOUS CONTINUATION EXCLUSION must not over-fire on a genuine affirmative."
+    },
+    {
+      "name": "Pre-set caller_first_name + caller confirms without stating name — must ASK, not assume/echo",
+      "tags": [
+        "name-capture-no-assume"
+      ],
+      "dvs": {
+        "caller_first_name": "John"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "Good afternoon, thank you for calling Raymond Terrace and Tea Gardens Osteopaths. May I ask your name please?"
+        },
+        {
+          "role": "user",
+          "content": "Yeah, that's me — you've got it on file."
+        }
+      ],
+      "expected_behavior": "PASS if: agent does NOT say 'Hi John' or otherwise address the caller by {{caller_first_name}}, does not set patient_name_stated, and explicitly asks for the caller's name (e.g. 'May I ask your name please?' or a very close equivalent), with zero tool call this turn. FAIL if: agent greets the caller as 'John' (or any pre-set name) without the caller having explicitly stated it this call, or proceeds to route a signal using the assumed name."
+    },
+    {
+      "name": "Pre-set caller_first_name matches + caller explicitly states their name while booking — capture normally (regression control)",
+      "tags": [
+        "name-capture-no-assume"
+      ],
+      "dvs": {
+        "caller_first_name": "John"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "Good afternoon, thank you for calling Raymond Terrace and Tea Gardens Osteopaths. May I ask your name please?"
+        },
+        {
+          "role": "user",
+          "content": "It's John — I'd like to book an appointment."
+        }
+      ],
+      "expected_behavior": "PASS if: agent treats 'It's John' as an explicit stated name (patient_name_raw='John', patient_name_stated='true') and, because booking language is also present, fires SIGNAL 1 BOOKING INTENT — spoken ack (e.g. 'Hi John!') immediately followed by a universal_router intent='book_intent' tool call in the same turn. FAIL if: agent asks for the name again despite it being explicitly stated this turn, or fails to call universal_router with intent='book_intent'."
+    },
+    {
+      "name": "Pre-set caller_first_name + caller states a different name — NAME SAVE FLOW must still trigger (regression control)",
+      "tags": [
+        "name-capture-no-assume"
+      ],
+      "dvs": {
+        "caller_first_name": "John"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "Good afternoon, thank you for calling Raymond Terrace and Tea Gardens Osteopaths. May I ask your name please?"
+        },
+        {
+          "role": "user",
+          "content": "This is Sarah."
+        }
+      ],
+      "expected_behavior": "PASS if: agent sets phone_owner_denied='true', patient_name_raw='Sarah', and runs NAME SAVE FLOW STEP 1 — speaking something equivalent to 'Hi Sarah! I have this number saved under John — should I update your patient record to Sarah for future calls and bookings?' with zero tool calls this turn. FAIL if: agent assumes the caller is John, greets them as John, or skips straight into NAME SAVE FLOW STEP 2 / routing without the STEP 1 confirmation question."
+    },
+    {
+      "name": "Pre-set caller_first_name + caller states first name plus surname (first word matches) — capture normally, no NAME SAVE FLOW",
+      "tags": [
+        "name-capture-surname-match"
+      ],
+      "dvs": {
+        "caller_first_name": "Lorna"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "You've reached Raymond Terrace and Tea Gardens Osteopaths, you're speaking with AI Jane. This call is recorded. May I ask your name please?"
+        },
+        {
+          "role": "user",
+          "content": "Lorna Tyson."
+        }
+      ],
+      "expected_behavior": "PASS if: agent treats 'Lorna Tyson' as the same caller giving their surname — sets patient_name_raw='Lorna Tyson', patient_name_stated='true', does NOT set phone_owner_denied, and does NOT run NAME SAVE FLOW (no 'I have this number saved under Lorna — should I update your patient record' question). Agent should proceed normally, e.g. greeting 'Hi Lorna Tyson! How can I help you today?' and waiting, or routing directly if booking/other intent language is also present. FAIL if: agent asks 'should I update your patient record to Lorna Tyson' or otherwise runs NAME SAVE FLOW STEP 1 — the first word of the stated name ('Lorna') matches {{caller_first_name}} ('Lorna'), so this is not a different name."
+    },
+    {
+      "name": "Pre-set caller_first_name + caller states an unrelated full name (first word does not match) — NAME SAVE FLOW must still trigger (regression control)",
+      "tags": [
+        "name-capture-surname-match"
+      ],
+      "dvs": {
+        "caller_first_name": "Lorna"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "You've reached Raymond Terrace and Tea Gardens Osteopaths, you're speaking with AI Jane. This call is recorded. May I ask your name please?"
+        },
+        {
+          "role": "user",
+          "content": "Sarah Tyson."
+        }
+      ],
+      "expected_behavior": "PASS if: agent sets phone_owner_denied='true', patient_name_raw='Sarah Tyson', and runs NAME SAVE FLOW STEP 1 — speaking something equivalent to 'Hi Sarah Tyson! I have this number saved under Lorna — should I update your patient record to Sarah Tyson for future calls and bookings?' with zero tool calls this turn. FAIL if: agent treats 'Sarah Tyson' as matching {{caller_first_name}} ('Lorna') and skips NAME SAVE FLOW — the first word 'Sarah' does not match 'Lorna', so the surname-match exclusion must NOT apply here."
+    },
+    {
+      "name": "details_ack already in-flight (found, zero appointments) — compound question must not re-trigger the appointment message or re-call details_ack",
+      "tags": [
+        "details-ack-call-lock",
+        "core"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Do I have an appointment on Thursday at 3, and also do I need a referral to see Bruce?"
+        },
+        {
+          "role": "assistant",
+          "content": "Let me check that.",
+          "tool_calls": [
+            {
+              "tool": "universal_router",
+              "params": {
+                "intent": "details",
+                "called_number": "{{called_number}}",
+                "caller_id": "{{caller_id}}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{\"intent\": \"details\", \"message\": \"You do not have any upcoming appointments. Would you like to book one?\", \"patient_lookup_done\": \"true\", \"appointment_lookup_failed\": \"\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "You do not have any upcoming appointments. Would you like to book one?",
+          "tool_calls": [
+            {
+              "tool": "details_ack",
+              "params": {
+                "called_number": "{{called_number}}",
+                "caller_id": "{{caller_id}}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{\"status\": \"in_progress\", \"message\": \"Executing the task in the background. Result will be reported later.\"}"
+        }
+      ],
+      "expected_behavior": "PASS if: the agent's next turn does NOT repeat or paraphrase the appointment message ('you do not have any upcoming appointments...') again, does NOT call details_ack a second time (a details_ack call already exists in history for this details result, only in_progress rather than completed — DETAILS_ACK CALL LOCK treats that the same as completed), and instead addresses the still-unanswered second half of the caller's original message (the referral question) via ordinary node logic — e.g. a filler phrase plus a universal_router intent='info_pivot' call, or an equivalent in-scope routing call. FAIL if: the agent re-speaks the appointment/no-appointments message in whole or in part; FAIL if: the agent calls details_ack again; FAIL if: the agent calls universal_router intent='details' again; FAIL if: the agent goes silent and does nothing about the referral question."
+    },
+    {
+      "name": "details_ack already in-flight (not-found) — compound question must not re-fire the silent ack a second time",
+      "tags": [
+        "details-ack-call-lock",
+        "not-found-routing",
+        "core"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Can you check if I have an appointment Thursday, and also what is your address?"
+        },
+        {
+          "role": "assistant",
+          "content": "One moment.",
+          "tool_calls": [
+            {
+              "tool": "universal_router",
+              "params": {
+                "intent": "details",
+                "called_number": "{{called_number}}",
+                "caller_id": "{{caller_id}}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{\"intent\": \"details\", \"message\": \"I could not find your details in our system. Have you booked with us before?\", \"error\": \"patient_not_found\", \"patient_lookup_done\": \"true\", \"appointment_lookup_failed\": \"true\", \"appointment_lookup_intent\": \"details\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "tool": "details_ack",
+              "params": {
+                "called_number": "{{called_number}}",
+                "caller_id": "{{caller_id}}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{\"status\": \"in_progress\", \"message\": \"Executing the task in the background. Result will be reported later.\"}"
+        }
+      ],
+      "expected_behavior": "PASS if: the agent's next turn does NOT call details_ack again (a call for this result already exists in history, only in_progress rather than completed — DETAILS_ACK CALL LOCK treats that the same as completed) and does NOT speak the not-found message or ask 'have you booked with us before' again — this node never speaks about a failed lookup, and appointment_lookup_failed='true' already routes automatically via an expression edge to the appointment-lookup-recovery node, so the caller's address question does not need to be answered here either. Silence / no further tool call this turn is an acceptable PASS. FAIL if: the agent calls details_ack again; FAIL if: the agent speaks the not-found message or any paraphrase of it; FAIL if: the agent calls universal_router intent='details' again."
     }
   ]
 }
