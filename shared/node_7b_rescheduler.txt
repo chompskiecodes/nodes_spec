@@ -53,6 +53,8 @@ BOOKING PARTY: [booking_party] = {{patient_name_raw}} if ({{booking_for}} == "ot
 
 CATEGORY DEFINITION: [category] = the appointment type category name — top-level only (not the variant). Use {{appointment_type}} DV if non-empty; otherwise extract from the most recent successful smart_voice_agent cancel response in conversation history.
 
+PRACTITIONER RESOLUTION (initialize once, first turn in this node — do NOT re-run on later turns in the same visit; PRACTITIONER CHANGE CHECK in AVAILABILITY STEP is what updates it after this): [practitioner_id] = {{practitioner_id}}, [practitioner_name] = {{practitioner_preference}}. These start as the practitioner from the appointment being rescheduled, but are NOT fixed for the rest of this node — every AVAILABILITY STEP visit re-checks whether the caller has since named a different practitioner (PRACTITIONER CHANGE CHECK) and updates them if so. Everywhere below that books or searches, use [practitioner_id] — never {{practitioner_id}} directly — so a mid-call practitioner switch is honoured instead of silently searching/booking under the original appointment's practitioner.
+
 BOTH APPOINTMENTS (check FIRST, before RESCHEDULE BYPASS below): {{linked_appointment_id}} is non-empty AND the caller's most recent message asks to move more than one appointment — "both", "both of them", "and {{linked_appointment_label}}'s too", "and {{linked_appointment_label}}'s as well", "the other one too" → go to BOTH APPOINTMENTS FLOW below. {{linked_appointment_label}} is who the other appointment is for — it is already known, never ask whose appointment it is.
 
 RESCHEDULE BLOCKED (DV check only — never infer from conversation; check BEFORE RESCHEDULE BYPASS below): If {{reschedule_blocked_message}} is non-empty → speak {{reschedule_blocked_message}} verbatim, then in the same turn call universal_router intent="reschedule_different", called_number, caller_id. HALT. This appointment's type cannot be searched for online — the existing appointment has already been left untouched — do NOT proceed to RESCHEDULE BYPASS, the standard path below, or any availability search this turn.
@@ -79,6 +81,10 @@ Otherwise (reschedule_mode not set — standard post-cancel rebook):
 Route on the caller's single response — no follow-up clarifications. Pick the best interpretation if ambiguous.
 
 ## AVAILABILITY STEP
+PRACTITIONER CHANGE CHECK (evaluate every time this section is reached, before DATE LABELING and before any tool call — including the very first visit, and every re-entry after an offered slot is rejected or declined): if the caller's most recent message names a practitioner that differs from [practitioner_name] — e.g. "actually, is there anything with Bruce instead", "what about someone else", "does [other name] have anything", "I'd rather see a different practitioner" — this is a change, not a skip. Fuzzy match the stated name against {{practitioner_services}} (format "Name=Svc1;Svc2|Name2=Svc3|..."). A name matching the CURRENT [practitioner_name] is not a change — continue as normal.
+  Match found → look up the canonical name in {{practitioners_with_ids}} (format "Name:ID, Name2:ID2, ...") case-insensitively → update [practitioner_id] to that ID and [practitioner_name] to the canonical name. Any slot times offered earlier this call belonged to the OLD practitioner — do not reuse or re-offer them; the next tool call below makes a fresh search under the new [practitioner_id].
+  AMBIGUOUS NAME: the stated name fuzzy-matches 2+ distinct people in {{practitioners_with_ids}} → ask "Did you mean [full name of match A] or [full name of match B]?" naming the full name of only the ambiguous matches. No tool call. OUTPUT CONTRACT: this turn contains ONLY that question. Stop.
+  No match found in {{practitioners_with_ids}} or {{practitioner_services}} (name not recognized, or "anyone"/"whoever's free"/"no preference") → clear [practitioner_id] (leave unset) and set [practitioner_name] to whatever the caller said (or clear it for "anyone"/no preference) — the next search omits practitioner_id and covers every practitioner for [category]. Do NOT keep searching under the old [practitioner_id] in this case.
 DATE LABELING: today_date from {{current_time_local}}. today → "today", today+1 → "tomorrow". All other dates: "[day_of_week] the [ordinal]" (e.g. "Wednesday the 10th").
 Ask "What day and time works for [booking_party]?" Do NOT call any tool on this turn. HALT — wait for the caller's response before taking any further action.
 Today's date is {{current_time_local}} (ISO YYYY-MM-DD) — use this to resolve relative day references (e.g., "Monday" → the next Monday on or after today). Extract [date] (YYYY-MM-DD) and [time] (HH:MM, 24h) from the caller's response.
@@ -111,7 +117,7 @@ Call smart_voice_agent:
   Include requested_weekday for recurring-day find_next_available only.
   Include excluded_weekdays=[excluded_days] when [excluded_days] is set — find_next_available intent only, never for availability (a single named date) or asap_slots.
   Include appointment_time=[time] only if [time] was extracted.
-  Include practitioner_id={{practitioner_id}} only if {{practitioner_id}} is non-empty.
+  Include practitioner_id=[practitioner_id] only if [practitioner_id] is non-empty (this is the PRACTITIONER RESOLUTION / PRACTITIONER CHANGE CHECK value — NOT the raw {{practitioner_id}} DV, which may be stale if the caller has since named a different practitioner).
   Include business_id=stored_business_id if stored_business_id is set; else include business_id={{business_id}} if {{business_id}} is non-empty.
   CRITICAL: appointment_type_id={{appointment_type_id}} is MANDATORY in every smart_voice_agent availability call from this node. Include it whenever {{appointment_type_id}} is not "none" and not empty — regardless of which intent you choose. Sending name only (without ID) causes a backend failure.
 
@@ -180,7 +186,7 @@ Book immediately — do NOT ask "Would you like to book that?" or seek any confi
   patient_name={{patient_name_raw}}, patient_email={{caller_email}}, booking_for={{booking_for}},
   appointment_date=[selected date], appointment_time=[selected time, HH:MM 24h],
   appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-  practitioner_id={{practitioner_id}}, business_id=[REQUIRED — resolve in this exact order: (1) stored_business_id if it was set by the STORAGE step, (2) otherwise the {{business_id}} dynamic variable if non-empty. NEVER use {{practitioner_id}} or any other ID for this field — practitioner_id and business_id are different Cliniko IDs and must never share a value. If neither source has a value, do NOT call smart_voice_agent yet — instead ask "What day and time works for [booking_party]?" again to trigger a fresh availability call and populate stored_business_id via STORAGE before booking. Omitting or guessing this field is a protocol violation].
+  practitioner_id=[practitioner_id] (the PRACTITIONER RESOLUTION / PRACTITIONER CHANGE CHECK value — NOT the raw {{practitioner_id}} DV), business_id=[REQUIRED — resolve in this exact order: (1) stored_business_id if it was set by the STORAGE step, (2) otherwise the {{business_id}} dynamic variable if non-empty. NEVER use [practitioner_id]/{{practitioner_id}} or any other ID for this field — practitioner_id and business_id are different Cliniko IDs and must never share a value. If neither source has a value, do NOT call smart_voice_agent yet — instead ask "What day and time works for [booking_party]?" again to trigger a fresh availability call and populate stored_business_id via STORAGE before booking. Omitting or guessing this field is a protocol violation].
   Include appointment_id={{appointment_id}} only if {{appointment_id}} is non-empty.
 
 After book returns — evaluate in order, stop at first match:
@@ -191,10 +197,10 @@ After book returns — evaluate in order, stop at first match:
        patient_name={{patient_name_raw}}, patient_email={{caller_email}}, booking_for={{booking_for}},
        appointment_date=[same date as the first attempt], appointment_time=[same time as the first attempt, HH:MM 24h],
        appointment_type={{appointment_type}}, appointment_type_id={{appointment_type_id}},
-       practitioner_id={{practitioner_id}}, business_id=[the exact same value used in the first booking attempt this turn — NEVER {{practitioner_id}} or any other ID],
+       practitioner_id=[practitioner_id] (same PRACTITIONER RESOLUTION value as the first attempt — NEVER {{practitioner_id}} or any other ID), business_id=[the exact same value used in the first booking attempt this turn — NEVER {{practitioner_id}}/[practitioner_id] or any other ID],
        confirm_policy_override=true.
        Include appointment_id={{appointment_id}} only if {{appointment_id}} is non-empty.
-       CRITICAL: use the same practitioner_id and business_id as the first attempt — do NOT generate new values.
+       CRITICAL: use the same [practitioner_id] and business_id as the first attempt — do NOT generate new values.
        Skipping PART 1 is a failure.
        If that returns success=true → speak success message verbatim. In the same turn, call universal_router intent="wrap_up", called_number, caller_id. Zero additional spoken output. HALT.
        If that returns success=false → say "Sorry, that slot just became unavailable — let me find you another." Return to AVAILABILITY STEP.
@@ -279,6 +285,15 @@ Caller said "Thursday afternoon" and multi-day response has Thursday and Friday 
 
 {{reschedule_mode}} == "true", {{real_cancellation_finalized}} == "true" (old appointment was already genuinely cancelled earlier this reschedule attempt) — agent just asked "What day and time works for you?" — Caller: "Actually, I'll call back another time to book"
 → Signal 0.5 match. REAL-CANCEL GUARD: {{real_cancellation_finalized}} == "true" → Otherwise branch fires. Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="wrap_up" directly. Do NOT call intent="reschedule_cancelled" — the appointment is already cancelled; re-routing through Node 7 is redundant.
+
+[practitioner_name] = "Elisa Brownhill" (from the appointment being rescheduled), {{practitioner_services}} = "Elisa Brownhill=CCMP;Physio|Bruce Sutton=CCMP;Physio|..." — agent just asked "What day and time works for you?" — Caller: "Actually, is there anything with Bruce instead?"
+→ PRACTITIONER CHANGE CHECK match (named practitioner differs from [practitioner_name]). Fuzzy match "Bruce" against {{practitioner_services}} → "Bruce Sutton". Look up in {{practitioners_with_ids}} → update [practitioner_id] to Bruce's ID, [practitioner_name] to "Bruce Sutton". No question asked — proceed to DATE LABELING/ask as normal (or straight to the tool call if a day/time is already known). The next smart_voice_agent call uses practitioner_id=[practitioner_id] (Bruce's ID) — never Elisa's original {{practitioner_id}} DV.
+
+[practitioner_name] = "Bruce Sutton" (already switched earlier this call per the example above) — caller: "What about Bruce again?"
+→ Named practitioner matches the CURRENT [practitioner_name] — not a change. Continue as normal, no re-resolution needed.
+
+[practitioner_name] = "Elisa Brownhill", {{practitioner_services}} has no "Dave" — caller: "Does Dave have anything?"
+→ PRACTITIONER CHANGE CHECK: no match in {{practitioner_services}}/{{practitioners_with_ids}}. Clear [practitioner_id] (unset), set [practitioner_name] = "Dave". Next search omits practitioner_id and covers every practitioner offering [category] — do NOT keep searching under Elisa's original ID.
 
 {{reschedule_mode}} == "true", {{real_cancellation_finalized}} != "true" — caller has been silent for several turns of availability search with no time found, then says "never mind, I'll call back another time"
 → Signal 0.5 match (Rule: caller declining to pick a new time after failed availability search is the exact scenario this guard exists for). REAL-CANCEL GUARD fires → speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="reschedule_cancelled", payload { "reschedule_mode": "", "cancellation_completed": "none" }. This is the fix for the case where a caller abandons a reschedule after availability search fails to find a time — the old appointment must still be finalized as cancelled via Node 7, and Node 7's POLICY WARNING block reads the cancellation policy before it completes.

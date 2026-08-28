@@ -3,7 +3,9 @@
   "scenarios": [
     {
       "name": "TIME PRONUNCIATION — offering a :05 slot must not say 'o'clock five'",
-      "tags": ["time-pronunciation"],
+      "tags": [
+        "time-pronunciation"
+      ],
       "history": [
         {
           "role": "assistant",
@@ -1056,6 +1058,162 @@
         }
       ],
       "expected_behavior": "PASS if: RESCHEDULE BLOCKED does not fire (reschedule_blocked_message is empty), agent proceeds via RESCHEDULE BYPASS with {{timeframe_raw}} empty — asks \"What day and time works for you?\" and does NOT call any tool this turn. FAIL if: agent speaks any blocked/apology message, or calls universal_router intent=\"reschedule_different\" with no basis."
+    },
+    {
+      "name": "PC1 — caller names a different practitioner than the original appointment, no day/time yet known",
+      "tags": [
+        "core",
+        "practitioner-change"
+      ],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type": "CCMP Raymond Terrace",
+        "appointment_type_id": "415451077979150688",
+        "practitioner_preference": "Elisa Brownhill",
+        "practitioner_id": "883714138008722063",
+        "practitioner_services": "Elisa Brownhill=CCMP;Physio|Bruce Sutton=CCMP;Physio",
+        "practitioners_with_ids": "Elisa Brownhill:883714138008722063, Bruce Sutton:412461073866693445"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Actually, is there anything with Bruce this Wednesday afternoon instead?"
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks a filler phrase and calls smart_voice_agent with practitioner_id='412461073866693445' (Bruce Sutton's ID, resolved via {{practitioners_with_ids}} after fuzzy-matching 'Bruce' against {{practitioner_services}}) — NOT the original appointment's practitioner_id '883714138008722063' (Elisa Brownhill). FAIL if: agent searches/books under Elisa's original practitioner_id, asks an unnecessary disambiguation question when only one clear 'Bruce' match exists in {{practitioner_services}}, or asks the caller to reconfirm they want to switch practitioners (PRACTITIONER CHANGE CHECK resolves silently, no confirmation question)."
+    },
+    {
+      "name": "PC2 — caller re-names the SAME (already switched) practitioner later — not a change, no re-resolution or redundant question",
+      "tags": [
+        "practitioner-change"
+      ],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type": "CCMP Raymond Terrace",
+        "appointment_type_id": "415451077979150688",
+        "practitioner_preference": "Elisa Brownhill",
+        "practitioner_id": "883714138008722063",
+        "practitioner_services": "Elisa Brownhill=CCMP;Physio|Bruce Sutton=CCMP;Physio",
+        "practitioners_with_ids": "Elisa Brownhill:883714138008722063, Bruce Sutton:412461073866693445"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Actually, is there anything with Bruce instead?"
+        },
+        {
+          "role": "assistant",
+          "content": "Just a sec."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"found\": true, \"slot_groups\": {\"afternoon\": [\"2 PM\", \"4 PM\"]}, \"practitioners\": [{\"first_name\": \"Bruce\", \"last_name\": \"Sutton\", \"practitioner_id\": \"412461073866693445\", \"business_id\": \"412451910923065987\", \"dates\": [{\"date\": \"2026-09-02\"}]}]}"
+        },
+        {
+          "role": "assistant",
+          "content": "I've got 2 PM or 4 PM with Bruce on Wednesday — does either of those work?"
+        },
+        {
+          "role": "user",
+          "content": "Neither works, what about Bruce on Friday?"
+        }
+      ],
+      "expected_behavior": "PASS if: agent treats this as a NEW DAY request for the SAME already-resolved practitioner (Bruce, per PRACTITIONER CHANGE CHECK's 'name matching the CURRENT [practitioner_name] is not a change') — speaks a filler phrase and calls smart_voice_agent for Friday with practitioner_id='412461073866693445' (Bruce), with no re-disambiguation question. FAIL if: agent asks again whether the caller wants to switch to Bruce, reverts to searching under Elisa's original practitioner_id, or asks an unnecessary confirmation question."
+    },
+    {
+      "name": "PC3 — caller names no specific practitioner ('anyone') after an earlier switch was implied — must clear practitioner filter, not keep searching the original practitioner",
+      "tags": [
+        "practitioner-change"
+      ],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type": "CCMP Raymond Terrace",
+        "appointment_type_id": "415451077979150688",
+        "practitioner_preference": "Elisa Brownhill",
+        "practitioner_id": "883714138008722063",
+        "practitioner_services": "Elisa Brownhill=CCMP;Physio|Bruce Sutton=CCMP;Physio",
+        "practitioners_with_ids": "Elisa Brownhill:883714138008722063, Bruce Sutton:412461073866693445"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Does anyone have anything on Friday? Doesn't need to be Elisa."
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks a filler phrase and calls smart_voice_agent for Friday WITHOUT a practitioner_id parameter (or with it omitted/empty) — 'doesn't need to be Elisa' plus no other name stated means PRACTITIONER CHANGE CHECK's no-match/no-preference branch applies and the search covers every practitioner offering CCMP Raymond Terrace. FAIL if: agent still sends practitioner_id='883714138008722063' (Elisa's original ID), silently keeping the search scoped to her despite the caller explicitly saying it doesn't need to be her."
+    },
+    {
+      "name": "PC4 — caller names a practitioner that fuzzy-matches two distinct people — must ask which one, no tool call",
+      "tags": [
+        "practitioner-change"
+      ],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type": "CCMP Raymond Terrace",
+        "appointment_type_id": "415451077979150688",
+        "practitioner_preference": "Bruce Sutton",
+        "practitioner_id": "412461073866693445",
+        "practitioner_services": "Elisa Brownhill=CCMP;Physio|Elisa Reyes=CCMP;Physio|Bruce Sutton=CCMP;Physio",
+        "practitioners_with_ids": "Elisa Brownhill:883714138008722063, Elisa Reyes:900111222333, Bruce Sutton:412461073866693445"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Actually can I see Elisa instead?"
+        }
+      ],
+      "expected_behavior": "PASS if: agent asks 'Did you mean Elisa Brownhill or Elisa Reyes?' (naming both full names) with NO tool call this turn — 'Elisa' fuzzy-matches two distinct practitioners in {{practitioners_with_ids}}. FAIL if: agent silently guesses one of the two Elisas, proceeds to search/book without disambiguating, or asks a vaguer question that doesn't name both candidates."
+    },
+    {
+      "name": "PC5 — BOOKING STEP must book under the SWITCHED practitioner, not the original appointment's practitioner_id DV",
+      "tags": [
+        "core",
+        "practitioner-change"
+      ],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type": "CCMP Raymond Terrace",
+        "appointment_type_id": "415451077979150688",
+        "practitioner_preference": "Elisa Brownhill",
+        "practitioner_id": "883714138008722063",
+        "practitioner_services": "Elisa Brownhill=CCMP;Physio|Bruce Sutton=CCMP;Physio",
+        "practitioners_with_ids": "Elisa Brownhill:883714138008722063, Bruce Sutton:412461073866693445"
+      },
+      "history": [
+        {
+          "role": "assistant",
+          "content": "What day and time works for you?"
+        },
+        {
+          "role": "user",
+          "content": "Actually, is there anything with Bruce this Wednesday at 2pm instead?"
+        },
+        {
+          "role": "assistant",
+          "content": "Just a sec."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"found\": true, \"slot_groups\": {\"afternoon\": [\"2 PM\", \"4 PM\"]}, \"practitioners\": [{\"first_name\": \"Bruce\", \"last_name\": \"Sutton\", \"practitioner_id\": \"412461073866693445\", \"business_id\": \"412451910923065987\", \"dates\": [{\"date\": \"2026-09-02\"}]}]}"
+        }
+      ],
+      "expected_behavior": "PASS if: agent says 'Let me lock that in.' and calls smart_voice_agent intent='book' with practitioner_id='412461073866693445' (Bruce Sutton's resolved ID) and business_id='412451910923065987' — NOT the raw {{practitioner_id}} DV value '883714138008722063' (Elisa Brownhill, the original appointment's practitioner). FAIL if: agent books under Elisa's original practitioner_id despite the caller having switched to Bruce earlier this turn/visit."
     }
   ]
 }
