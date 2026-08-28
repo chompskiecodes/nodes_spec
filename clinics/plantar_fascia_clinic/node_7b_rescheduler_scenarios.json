@@ -127,6 +127,60 @@
         { "role": "user", "content": "Can we push my appointment back an hour?" }
       ],
       "expected_behavior": "PASS if: agent does NOT enter BOTH APPOINTMENTS FLOW (linked_appointment_id is empty) — proceeds through the ordinary RESCHEDULE BYPASS path instead, asking the AVAILABILITY STEP day/time question (with Friday framing, since this is the first ask this call) with no tool call. FAIL if: agent asks about a second appointment, references Peter or any other party, or otherwise behaves as if a linked appointment exists."
+    },
+    {
+      "name": "RB1 — ENTRY, reschedule_blocked_message set (show_in_online_bookings=false type) — must speak it verbatim and route to reschedule_different, never ask for a day/time or search availability",
+      "tags": ["reschedule-blocked-entry", "core"],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type_id": "none",
+        "appointment_type": "",
+        "reschedule_blocked_message": "I'm sorry, I'm not able to reschedule that appointment online. I've left it exactly as it is — please call the clinic directly and they'll help you arrange a new time."
+      },
+      "history": [
+        { "role": "user", "content": "I have a 30 minute consultation with Ben I need to move — Friday the 21st or the 28th would work." },
+        { "role": "assistant", "content": "Certainly. I'll take care of that for you." },
+        { "role": "tool", "content": "[universal_router reschedule_to_book response]: {\"status\": \"success\", \"appointment_type_id\": \"none\", \"reschedule_mode\": \"true\", \"reschedule_blocked_message\": \"I'm sorry, I'm not able to reschedule that appointment online. I've left it exactly as it is — please call the clinic directly and they'll help you arrange a new time.\"}" }
+      ],
+      "expected_behavior": "PASS if: agent's ONLY spoken output this turn is the reschedule_blocked_message text verbatim (no added apology, no restating the caller's request, no Friday-only framing sentence — there is no day/time question to frame), and in the same turn it calls universal_router intent=\"reschedule_different\" with called_number and caller_id. FAIL if: agent asks \"What day and time works for you?\" (with or without the Friday framing sentence), calls smart_voice_agent (availability or book), falls through to the standard post-cancel rebook path (asking what type of appointment), or paraphrases instead of speaking the message verbatim. This clinic's own show_in_online_bookings=false types (e.g. \"30 minute consultation\", 153 historical bookings) are exactly the case this guards against, even though 0 are currently booked in the future (DB-checked 2026-08-28)."
+    },
+    {
+      "name": "RB2 — RESCHEDULE BLOCKED must be checked before RESCHEDULE BYPASS's TARGET TIME KNOWN path, even when appointment_type_id AND a non-Friday timeframe_raw are both populated — must never reach FRIDAY REDIRECT",
+      "tags": ["reschedule-blocked-entry"],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type_id": "762470939114872620",
+        "appointment_type": "30 minute consultation",
+        "practitioner_id": "762470934442417226",
+        "practitioner_preference": "Ben Leyson",
+        "timeframe_raw": "next Wednesday at 10",
+        "reschedule_blocked_message": "I'm sorry, I'm not able to reschedule that appointment online. I've left it exactly as it is — please call the clinic directly and they'll help you arrange a new time."
+      },
+      "history": [
+        { "role": "user", "content": "I need to move my appointment to next Wednesday at 10." },
+        { "role": "assistant", "content": "Certainly. I'll take care of that for you." },
+        { "role": "tool", "content": "[universal_router reschedule_to_book response]: {\"status\": \"success\", \"reschedule_blocked_message\": \"I'm sorry, I'm not able to reschedule that appointment online. I've left it exactly as it is — please call the clinic directly and they'll help you arrange a new time.\"}" }
+      ],
+      "expected_behavior": "PASS if: agent still speaks reschedule_blocked_message verbatim and calls universal_router intent=\"reschedule_different\" — does NOT treat the non-empty appointment_type_id + timeframe_raw as satisfying RESCHEDULE BYPASS's TARGET TIME KNOWN branch, and critically does NOT ever evaluate or speak the FRIDAY REDIRECT question (\"We're only able to do Fridays...\") even though \"next Wednesday\" is a non-Friday day that would normally trigger it from AVAILABILITY STEP — RESCHEDULE BLOCKED HALTs before FRIDAY REDIRECT is ever reached. FAIL if: agent asks about or searches Wednesday the 10th using the DV-populated appointment context instead of blocking, or asks the Friday-redirect question at all this turn."
+    },
+    {
+      "name": "RB3 (negative/regression) — reschedule_blocked_message EMPTY, normal RESCHEDULE BYPASS + Friday framing proceeds exactly as before this change",
+      "tags": ["reschedule-blocked-entry", "core"],
+      "dvs": {
+        "reschedule_mode": "true",
+        "appointment_type_id": "2010560230416457414",
+        "appointment_type": "Subsequent Consultation",
+        "practitioner_id": "762470934442417226",
+        "practitioner_preference": "Ben Leyson",
+        "timeframe_raw": "",
+        "reschedule_blocked_message": ""
+      },
+      "history": [
+        { "role": "user", "content": "I need to reschedule my appointment." },
+        { "role": "assistant", "content": "Certainly. I'll take care of that for you." },
+        { "role": "tool", "content": "[universal_router reschedule_to_book response]: {\"status\": \"success\", \"appointment_type_id\": \"2010560230416457414\", \"reschedule_mode\": \"true\"}" }
+      ],
+      "expected_behavior": "PASS if: RESCHEDULE BLOCKED does not fire (reschedule_blocked_message is empty), agent proceeds via RESCHEDULE BYPASS with {{timeframe_raw}} empty — asks the AVAILABILITY STEP day/time question prepended with the Friday-only framing sentence (this is the first day/time ask this call) and does NOT call any tool this turn. FAIL if: agent speaks any blocked/apology message, calls universal_router intent=\"reschedule_different\" with no basis, or omits the Friday framing sentence."
     }
   ]
 }
