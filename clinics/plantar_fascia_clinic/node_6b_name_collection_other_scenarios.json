@@ -111,6 +111,230 @@
         { "role": "user", "content": "No, it's an S not a C — s-smith81." }
       ],
       "expected_behavior": "PASS if the correction confirmation pairs the corrected letter with a short disambiguating word (e.g. \"an S, as in Sam, instead of a C, as in Charlie\") rather than repeating bare letters. FAIL if the readback says only \"an S instead of a C\" with no anchor word — this is a retry after the first bare-letter readback already needed correcting, so RE-CONFIRMATION ESCALATION applies."
+    },
+    {
+      "name": "PC2 — phone already known: the combined NAME-step question asks 'is that right', not for a number",
+      "tags": ["phone-collection"],
+      "history": [
+        { "role": "user", "content": "I need to book for my daughter." },
+        { "role": "assistant", "content": "Of course, what's her full name?" },
+        { "role": "user", "content": "Emily Chen" }
+      ],
+      "dvs": {
+        "system__caller_id": "+61412345678",
+        "caller_id": "",
+        "caller_first_name": "",
+        "caller_last_name": "",
+        "booking_for": "other"
+      },
+      "expected_behavior": "PASS if agent speaks 'I'll put your number on Emily's record — is that right, or does she have her own?' AND calls universal_router intent='capture_context' with patient_name_raw='Emily Chen' (phone already known via system__caller_id). FAIL if agent speaks 'What's a good number to reach Emily on?' (wrong variant — phone was already known). FAIL if the tool is called silently without spoken output."
+    },
+    {
+      "name": "PC3 — Long-context OFFER QUESTION: after a completed self-booking flow, patient_name_raw arrives via route_other (not capture_context), caller_id/caller_phone non-empty since call start — must still ask the OFFER QUESTION, not the phone-unknown question",
+      "tags": ["core", "phone-collection", "long-context-regression"],
+      "history": [
+        { "role": "user", "content": "Hi, it's Betty Chad, I was looking to make an appointment." },
+        { "role": "assistant", "content": "Hi Betty! Sounds good, let's get that sorted. Just one moment." },
+        { "role": "tool", "content": "[universal_router response]: {\"intent\": \"book_intent\", \"success\": true, \"patient_name_raw\": \"Betty Chad\", \"patient_status\": \"new\"}" },
+        { "role": "assistant", "content": "Is this for foot pain, heel pain, or something else?" },
+        { "role": "user", "content": "I've got plantar fasciitis and need my foot checked. My husband has arthritis in his feet too and could use some help." },
+        { "role": "assistant", "content": "That sounds rough. We can definitely help with that." },
+        { "role": "tool", "content": "[universal_router response]: {\"intent\": \"confirm_service\", \"success\": true, \"appointment_type\": \"Initial Consultation\", \"appointment_type_id\": \"2010559925616385733\", \"booking_for\": \"self\"}" },
+        { "role": "assistant", "content": "We're open Wednesdays and Thursdays — when would suit you?" },
+        { "role": "user", "content": "Twelve twenty or one thirty works — can my husband get in then too? Don Child." },
+        { "role": "assistant", "content": "Sure thing — so I'll book you in for twelve twenty on Thursday. For your husband Don, I'll need a separate appointment — twelve twenty, one thirty, or a different time?" },
+        { "role": "user", "content": "One thirty would be best for him." },
+        { "role": "tool", "content": "[universal_router response]: {\"intent\": \"confirm_time\", \"success\": true, \"message\": \"Great, twelve twenty on Thursday it is.\", \"booking_for\": \"self\"}" },
+        { "role": "assistant", "content": "Do you have an email address for the booking?" },
+        { "role": "user", "content": "It's buddiechard, all one word, B-U-D-D-I-E, C-H-A-R-D, at gmail dot com." },
+        { "role": "assistant", "content": "So that's B, U, D, D, I, E, C, H, A, R, D at gmail dot com — is that right?" },
+        { "role": "user", "content": "Yes, thank you." },
+        { "role": "assistant", "content": "Checking that now, one moment." },
+        { "role": "tool", "content": "[smart_voice_agent response]: {\"success\": true, \"message\": \"Wonderful Betty! You're confirmed with Dr. Lee for Initial Consultation on Thursday at 12:20 PM.\", \"booking_id\": \"2029468893906481017\", \"patient_name\": \"Betty Chad\", \"booking_for\": \"self\"}" },
+        { "role": "assistant", "content": "Wonderful Betty! You're confirmed with Dr. Lee for Initial Consultation on Thursday at twelve twenty PM. Before your first session it is very helpful if you can bring someone with you to help your recovery. Do you have anyone you could bring?" },
+        { "role": "user", "content": "My husband will come along too." },
+        { "role": "assistant", "content": "Great, one more thing before we wrap up the call. You will receive a text message and email that will give you access to our pre appointment preparation videos and information. We highly recommend you watch these to get the most out your first session." },
+        { "role": "tool", "content": "[universal_router response]: {\"intent\": \"wrap_up\", \"success\": true}" },
+        { "role": "tool", "content": "[universal_router response]: {\"intent\": \"route_other\", \"success\": true, \"booking_for\": \"other\", \"patient_name_raw\": \"Don Child\"}" }
+      ],
+      "dvs": {
+        "patient_name_raw": "Don Child",
+        "caller_id": "0447369517",
+        "caller_phone": "0447369517",
+        "caller_email": "",
+        "booking_for": "other",
+        "appointment_date": "2026-09-03",
+        "appointment_time": "13:30",
+        "appointment_type": "Subsequent Consultation",
+        "appointment_type_id": "2010560230416457414"
+      },
+      "expected_behavior": "PASS if agent speaks 'I'll put your number on Don's record — is that right, or does he have his own?' (or equivalent naming Don) AND calls universal_router intent='capture_context' with payload patient_name_raw='Don Child' in the same turn — caller_id/caller_phone are non-empty (they have been since the very first turn, unchanged by the self-booking flow that just completed), so the OFFER QUESTION variant applies even though patient_name_raw arrived via route_other rather than a capture_context call in this node. FAIL if agent asks 'What's a good number to reach Don on?' or any phone-unknown-variant question — this is the exact live regression being tested: a long prior self-booking flow in history must not cause the agent to treat caller_id/caller_phone as unknown or already-consumed. FAIL if agent asks 'What is his full name?' (name is already set via DV)."
+    },
+    {
+      "name": "PH2 — Phone number correction: agent must use the FINAL corrected/confirmed number in the EXECUTE payload, not the first misheard digits",
+      "tags": ["core", "phone-collection", "phone-correction"],
+      "history": [
+        { "role": "user", "content": "It's for my husband, Don Child." },
+        { "role": "assistant", "content": "What's a good number to reach him on?" },
+        { "role": "user", "content": "0409 022 5524." },
+        { "role": "assistant", "content": "So that's zero four zero nine, zero two two, five five two four — is that right?" },
+        { "role": "user", "content": "You're a bit quick for me there. Zero four zero nine, double two, double five, two four." },
+        { "role": "assistant", "content": "Got it — zero four zero nine, double two, double five, two four. Is that right?" },
+        { "role": "user", "content": "Yeah. Yes, thank you." },
+        { "role": "assistant", "content": "What's Don's email address?" },
+        { "role": "user", "content": "He doesn't have one." }
+      ],
+      "dvs": {
+        "patient_name_raw": "Don Child",
+        "caller_id": "",
+        "caller_phone": "",
+        "booking_for": "other",
+        "appointment_date": "2026-09-03",
+        "appointment_time": "13:30",
+        "appointment_type": "Initial Consultation",
+        "appointment_type_id": "2010559925616385733"
+      },
+      "expected_behavior": "PASS if agent speaks 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' with patient_phone='0409225524' — the digits from the CORRECTED readback the caller actually confirmed ('double two, double five, two four' = 2,2,5,5,2,4 after 0409), not '0409022524' (the digits from the FIRST, unconfirmed readback the caller explicitly said was too fast to follow). This is the exact live regression being tested: when a caller corrects a misheard number and then confirms the corrected readback, the corrected number is the one that was actually agreed — the first, superseded readback must not leak into the booking payload. FAIL if patient_phone is '0409022524' or any value other than '0409225524'. FAIL if agent asks the caller to repeat the number a third time."
+    },
+    {
+      "name": "SR3 — slot_not_available routes to change_time, not the generic failure line",
+      "tags": ["core", "booking-error-recovery"],
+      "history": [
+        { "role": "user", "content": "Book my husband in for a physio appointment." },
+        { "role": "assistant", "content": "What is his full name?" },
+        { "role": "user", "content": "Marcus Idris" },
+        { "role": "assistant", "content": "I'll put your number on Marcus's record — is that right, or does he have his own?" },
+        { "role": "user", "content": "Use mine." },
+        { "role": "assistant", "content": "Do you have an email address for the booking?" },
+        { "role": "user", "content": "No thanks, skip it." },
+        { "role": "assistant", "content": "Checking that now, one moment." },
+        { "role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"slot_not_available\", \"message\": \"I'm sorry, that time slot is no longer available. Let me find you another option.\"}" }
+      ],
+      "expected_behavior": "Speak the message field verbatim with no additions, then in the same turn call universal_router intent=\"change_time\" with called_number and caller_id. Must NOT say the generic \"I'm having trouble finalizing that booking.\" line."
+    },
+    {
+      "name": "SR4 — practitioner_service_mismatch routes to change_practitioner, not the generic failure line",
+      "tags": ["core", "booking-error-recovery"],
+      "history": [
+        { "role": "user", "content": "I need to book my daughter Amelia for a remedial massage with Nicole." },
+        { "role": "assistant", "content": "I'll put your number on Amelia's record — is that right, or does she have her own?" },
+        { "role": "user", "content": "Use mine." },
+        { "role": "assistant", "content": "Do you have an email address for the booking?" },
+        { "role": "user", "content": "No thanks, skip it." },
+        { "role": "assistant", "content": "Checking that now, one moment." },
+        { "role": "tool", "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"practitioner_service_mismatch\", \"message\": \"I'm sorry, that practitioner doesn't offer that service. Could you let me know again which practitioner and service you'd like to book?\"}" }
+      ],
+      "expected_behavior": "Speak the message field verbatim with no additions, then in the same turn call universal_router intent=\"change_practitioner\" with called_number and caller_id. Must NOT say the generic \"I'm having trouble finalizing that booking.\" line, and must NOT call intent=\"change_service\"."
+    },
+    {
+      "name": "CHILD1 — CHILD FAST-PATH: paediatric appointment type uses the caller's own phone silently, no phone question",
+      "tags": ["core", "child-fast-path"],
+      "history": [
+        { "role": "user", "content": "I'd like to book my daughter in for a paediatric assessment." },
+        { "role": "assistant", "content": "What is their full name?" },
+        { "role": "user", "content": "Ruby Chen" }
+      ],
+      "dvs": {
+        "appointment_type": "Paediatric Initial Assessment",
+        "system__caller_id": "+61412345678",
+        "caller_id": "",
+        "booking_for": "other"
+      },
+      "expected_behavior": "PASS if agent uses the caller's own number as patient_phone silently and asks for email directly, with NO phone question of any kind ('is that right, or do they have their own?' must not appear) — CHILD FAST-PATH applies because the appointment type is paediatric and a phone number is already known. FAIL if agent asks the standard phone-record question. FAIL if agent asks 'What's a good number to reach Ruby on?'."
+    },
+    {
+      "name": "EMS1 — text-me-instead asks MOBILE CHECK instead of executing immediately",
+      "tags": ["core", "email-capture-via-sms", "mobile-check-gate"],
+      "history": [
+        { "role": "user", "content": "I'd like to book an appointment for my wife." },
+        { "role": "assistant", "content": "What is their full name?" },
+        { "role": "user", "content": "Maria Santos" },
+        { "role": "assistant", "content": "I'll put your number on Maria's record — is that right, or do they have their own?" },
+        { "role": "user", "content": "That's fine, use mine." },
+        { "role": "assistant", "content": "What's their email address?" },
+        { "role": "user", "content": "Can you just text me instead?" }
+      ],
+      "expected_behavior": "PASS if agent asks the MOBILE CHECK question ('Are you on your mobile right now? I can text you to grab that.' or a close variant) addressed to the caller (not the wife/patient) and does NOT call smart_voice_agent yet — the text-me-instead outcome now requires confirming the caller can receive the text before executing. FAIL if agent calls smart_voice_agent in this turn (with or without email_capture_requested) instead of asking MOBILE CHECK first."
+    },
+    {
+      "name": "EMS1b — MOBILE CHECK confirmed sets email_capture_requested in EXECUTE payload",
+      "tags": ["core", "email-capture-via-sms", "mobile-check-gate"],
+      "history": [
+        { "role": "user", "content": "I'd like to book an appointment for my wife." },
+        { "role": "assistant", "content": "What is their full name?" },
+        { "role": "user", "content": "Maria Santos" },
+        { "role": "assistant", "content": "I'll put your number on Maria's record — is that right, or do they have their own?" },
+        { "role": "user", "content": "That's fine, use mine." },
+        { "role": "assistant", "content": "What's their email address?" },
+        { "role": "user", "content": "Can you just text me instead?" },
+        { "role": "assistant", "content": "Are you on your mobile right now? I can text you to grab that." },
+        { "role": "user", "content": "Yep, this is my mobile." }
+      ],
+      "expected_behavior": "PASS if agent speaks exactly 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' with patient_email omitted AND email_capture_requested: true included in the payload (name resolved, phone resolved via the caller's own number, email resolved via text-me-instead, MOBILE CHECK confirmed — EXECUTE fires this turn). FAIL if email_capture_requested is missing from the payload. FAIL if agent asks any further question instead of executing."
+    },
+    {
+      "name": "EMS1c — MOBILE CHECK declined executes with no email and no email_capture_requested",
+      "tags": ["email-capture-via-sms", "mobile-check-gate"],
+      "history": [
+        { "role": "user", "content": "I'd like to book an appointment for my wife." },
+        { "role": "assistant", "content": "What is their full name?" },
+        { "role": "user", "content": "Maria Santos" },
+        { "role": "assistant", "content": "I'll put your number on Maria's record — is that right, or do they have their own?" },
+        { "role": "user", "content": "That's fine, use mine." },
+        { "role": "assistant", "content": "What's their email address?" },
+        { "role": "user", "content": "Can you just text me instead?" },
+        { "role": "assistant", "content": "Are you on your mobile right now? I can text you to grab that." },
+        { "role": "user", "content": "No, I'm at my desk phone." }
+      ],
+      "expected_behavior": "PASS if agent speaks exactly 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' with BOTH patient_email and email_capture_requested omitted entirely from the payload (caller declined the MOBILE CHECK — proceed to EXECUTE with no email at all, same as a plain decline, rather than promising a text that can't be delivered). FAIL if email_capture_requested is included with any value. FAIL if agent re-asks for an email address instead of executing."
+    },
+    {
+      "name": "EMS2 — plain decline does NOT set email_capture_requested",
+      "tags": ["core", "email-capture-via-sms"],
+      "history": [
+        { "role": "user", "content": "I need to book my son in for an appointment." },
+        { "role": "assistant", "content": "What is their full name?" },
+        { "role": "user", "content": "Leo Nguyen" },
+        { "role": "assistant", "content": "I'll put your number on Leo's record — is that right, or do they have their own?" },
+        { "role": "user", "content": "Yeah that's fine." },
+        { "role": "assistant", "content": "What's their email address?" },
+        { "role": "user", "content": "No, they don't have one." }
+      ],
+      "expected_behavior": "PASS if agent speaks exactly 'Checking that now, one moment.' AND calls smart_voice_agent intent='book' with BOTH patient_email and email_capture_requested omitted entirely from the payload — a plain decline is not the text-me-instead outcome, so EMAIL-CAPTURE-VIA-SMS does not apply. FAIL if email_capture_requested is included (with any value) for this plain decline."
+    },
+    {
+      "name": "WTL1 — EXECUTE HALTs on waitlist_offer_pending, does not stack the bring-someone question in the same turn",
+      "tags": ["core", "waitlist"],
+      "history": [
+        { "role": "user", "content": "Yeah that's right, go ahead." },
+        { "role": "assistant", "content": "Checking that now, one moment." },
+        { "role": "tool", "content": "smart_voice_agent intent=\"book\" appointment_type_id=\"2010559925616385733\" appointment_type=\"Initial Consultation\" patient_name=\"Emma Jones\" booking_for=\"other\" -> {\"success\": true, \"waitlist_offer_pending\": true, \"message\": \"Emma's appointment is confirmed for Wednesday at 3pm with Sarah. Would you like me to also add Emma to the waitlist in case something sooner comes up?\"}" }
+      ],
+      "expected_behavior": "PASS if agent speaks the message field verbatim (ending on the waitlist question) and HALTs — no bring-someone question, no wrap_up, no other tool call this turn, even though this is an Initial Consultation. FAIL if the agent also asks 'Would they be able to bring someone?' or calls wrap_up in the same turn — that would stack a second question before the caller answers the first."
+    },
+    {
+      "name": "WTL2 — Waitlist accepted (Initial Consultation): waitlist_add fires with requested_date, then the bring-someone question follows, not wrap_up",
+      "tags": ["core", "waitlist", "initial-vs-followup-video-gate"],
+      "history": [
+        { "role": "user", "content": "Yeah that's right, go ahead." },
+        { "role": "assistant", "content": "Checking that now, one moment." },
+        { "role": "tool", "content": "smart_voice_agent intent=\"book\" appointment_type_id=\"2010559925616385733\" appointment_type=\"Initial Consultation\" patient_name=\"Emma Jones\" booking_for=\"other\" -> {\"success\": true, \"waitlist_offer_pending\": true, \"message\": \"Emma's appointment is confirmed for Wednesday at 3pm with Sarah. Would you like me to also add Emma to the waitlist in case something sooner comes up?\"}" },
+        { "role": "assistant", "content": "Emma's appointment is confirmed for Wednesday at 3pm with Sarah. Would you like me to also add Emma to the waitlist in case something sooner comes up?" },
+        { "role": "user", "content": "Yes please, that would be great." }
+      ],
+      "expected_behavior": "PASS if agent says 'Checking that now, one moment.' AND calls universal_router intent='waitlist_add' with payload including requested_date={{appointment_date}}, booking_for='other', patient_name='Emma Jones' (and appointment_type_id/appointment_type). Once that tool result returns, PASS if agent speaks its message verbatim then — because appointment_type_id is the Initial Consultation ID — asks 'Before their first session it is very helpful if they can bring someone with them to help their recovery. Would they be able to bring someone?' and waits, with no tool call that turn. FAIL if agent calls wrap_up instead of asking the bring-someone question. FAIL if waitlist_add is skipped or its payload omits requested_date."
+    },
+    {
+      "name": "WTL3 — Waitlist declined (Subsequent Consultation): no waitlist_add call, wrap_up still fires",
+      "tags": ["waitlist"],
+      "history": [
+        { "role": "user", "content": "Yes, that's right." },
+        { "role": "assistant", "content": "Checking that now, one moment." },
+        { "role": "tool", "content": "smart_voice_agent intent=\"book\" appointment_type_id=\"2010560230416457414\" appointment_type=\"Subsequent Consultation\" patient_name=\"Ava Kelly\" booking_for=\"other\" -> {\"success\": true, \"waitlist_offer_pending\": true, \"message\": \"Ava's appointment is confirmed for Friday at 3pm with Dr. Lee. Would you like me to also add Ava to the waitlist in case something sooner comes up?\"}" },
+        { "role": "assistant", "content": "Ava's appointment is confirmed for Friday at 3pm with Dr. Lee. Would you like me to also add Ava to the waitlist in case something sooner comes up?" },
+        { "role": "user", "content": "No, that's okay." }
+      ],
+      "expected_behavior": "PASS if agent does NOT call waitlist_add, and — because appointment_type_id is the Subsequent Consultation ID, not Initial — calls universal_router intent='wrap_up' in the same turn with no bring-someone question. FAIL if agent calls waitlist_add despite the decline. FAIL if agent asks the bring-someone question for a Subsequent Consultation booking."
     }
   ]
 }
