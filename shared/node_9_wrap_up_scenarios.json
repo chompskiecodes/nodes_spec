@@ -1,5 +1,5 @@
 {
-  "_comment": "Tests Node 9 wrap-up routing: follow-up request handling, CLEAR DECLINE end_call contract, plain-affirmative gate, and correct routing table intent selection.",
+  "_comment": "Tests Node 9 wrap-up routing: follow-up request handling, CLEAR DECLINE end_call contract, plain-affirmative gate, correct routing table intent selection, and the two-goodbye hard lock that caps repeated goodbye/universal_router loops.",
   "scenarios": [
     {
       "name": "CLEAR DECLINE — farewell must call end_call in same turn as goodbye",
@@ -825,6 +825,66 @@
         }
       ],
       "expected_behavior": "PASS if: agent speaks one TOOL-CALL FILLER phrase and calls universal_router with intent=\"wrap_new_known\" and payload booking_for=\"other\". FAIL if: intent is wrap_reschedule. No service or appointment type is named, so the SPECIAL CASE default would normally send this to wrap_reschedule — but the appointment is being handed to a different person, and that exception routes it to wrap_new_known so the wife gets her own availability search instead of inheriting the caller's slot."
+    },
+    {
+      "name": "GHL-1 — two goodbyes already spoken, caller keeps talking (background noise): hard lock must fire, never a third goodbye or a universal_router call",
+      "tags": [
+        "core",
+        "goodbye-hard-lock"
+      ],
+      "history": [
+        {
+          "role": "assistant",
+          "content": "Can I help with anything else?"
+        },
+        {
+          "role": "user",
+          "content": "It's all up, isn't it? Oh, sorry."
+        },
+        {
+          "role": "assistant",
+          "content": "Thanks for calling, bye."
+        },
+        {
+          "role": "system",
+          "content": "Tool result: {\"intent\": \"wrap_up\", \"status\": \"success\", \"message\": \"Routed successfully\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "Thanks for calling, bye."
+        },
+        {
+          "role": "user",
+          "content": "I just had a check, right?"
+        }
+      ],
+      "expected_behavior": "PASS if: agent speaks NOTHING (zero spoken text) and calls end_call only. FAIL if: agent speaks a third goodbye, answers the caller's rambling remark, or calls universal_router with any intent. This reproduces a live incident (conv_7501m1qgtm68ez0txad71cvwfx9b, Acacia Healing) where the caller kept talking in the background (giving driving directions to someone else in the car, not real replies to the agent) after two goodbyes had already been spoken, and the agent — instead of ending the call — re-ran CLASSIFY THE REPLY on every one of those background-noise turns, said 'Thanks for calling, bye.' a total of 9 times, called universal_router intent=\"wrap_up\" 8 times from inside this same node, and never called end_call once in a 236-second call. The call only ended because the caller's phone disconnected the connection — not because the agent hung up."
+    },
+    {
+      "name": "GHL-2 — single goodbye plus one genuine follow-up question must still work normally (hard lock must not fire early)",
+      "tags": [
+        "core",
+        "goodbye-hard-lock"
+      ],
+      "history": [
+        {
+          "role": "assistant",
+          "content": "Can I help with anything else?"
+        },
+        {
+          "role": "user",
+          "content": "No thanks, bye."
+        },
+        {
+          "role": "assistant",
+          "content": "Thanks for calling, bye."
+        },
+        {
+          "role": "user",
+          "content": "Oh wait, actually — can I also check if you take Medicare?"
+        }
+      ],
+      "expected_behavior": "PASS if: GOODBYE HARD LOCK does NOT fire (only one goodbye exists so far), GOODBYE-ALREADY-SPOKEN RETRY GUARD does NOT fire (a caller message arrived since that one goodbye), and the agent routes the Medicare question normally (info_pivot with return_node=\"9\"), NOT end_call. FAIL if: agent calls end_call without addressing the question, or treats one prior goodbye as already hitting the two-goodbye hard lock. This confirms the new GOODBYE HARD LOCK is scoped to two-or-more goodbies and does not regress the legitimate one-more-question case covered by GRG-2."
     }
   ]
 }
