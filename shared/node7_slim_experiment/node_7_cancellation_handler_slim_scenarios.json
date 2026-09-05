@@ -55,7 +55,7 @@
         {"role": "user", "content": "I need to reschedule my appointment"}
       ],
       "dvs": {"reschedule_mode": "true", "timeframe_raw": ""},
-      "expected_behavior": "Signal 8 ORIENTATION fires: reschedule_mode='true' AND rebook/move language (no resistance). timeframe_raw is empty so phrase is 'I'll cancel your existing booking first, then we'll find you a new time. Checking that now, one moment.' MANDATORY PART 2: call smart_voice_agent intent='cancel' in the SAME response. FAIL if orientation phrase is spoken without the tool call, OR if tool is called silently without the orientation phrase."
+      "expected_behavior": "Signal 8 ORIENTATION fires: reschedule_mode='true' AND rebook/move language, no resistance language. The current ORIENTATION line is a single fixed phrase that does not branch on timeframe_raw: MANDATORY PART 1: 'Let's find your booked appointment first.' MANDATORY PART 2: call smart_voice_agent intent='cancel' in the SAME response. FAIL if the phrase is spoken without the tool call, if the tool is called silently without the phrase, or if the agent instead speaks the RESISTANCE line ('To reschedule, I need to cancel the existing booking first — the new booking follows straight after.') or the old pre-split phrase ('I'll cancel your existing booking first, then we'll find you a new time...') — this scenario's trigger (no resistance language) is ORIENTATION's case, not RESISTANCE's."
     },
     {
       "name": "CRR — CONF REQUIRED CONFIRMED reschedule: 'Perfect...' + reschedule_to_book MUST be simultaneous",
@@ -98,7 +98,7 @@
       "history": [
         {"role": "user", "content": "I need to reschedule my appointment."}
       ],
-      "expected_behavior": "reschedule_mode DV is empty (not 'true'). SIGNAL 8 must NOT fire. Agent maps reschedule language to cancel flow via RESCHEDULE REFRAME and calls smart_voice_agent intent='cancel'. PASS if smart_voice_agent is called. FAIL if agent produces an orientation phrase ('I'll cancel your existing booking first...') AND the DV is clearly empty — acceptable if DV substitution is visible as empty string."
+      "expected_behavior": "reschedule_mode DV is empty (not 'true'). SIGNAL 8 must NOT fire. Agent maps reschedule language to cancel flow via RESCHEDULE REFRAME and calls smart_voice_agent intent='cancel'. PASS if smart_voice_agent is called. FAIL if agent produces a SIGNAL 8 phrase (ORIENTATION's 'Let's find your booked appointment first.' or RESISTANCE's 'To reschedule, I need to cancel the existing booking first...') AND the DV is clearly empty — acceptable if DV substitution is visible as empty string."
     },
     {
       "name": "DRO-1 (new) — plain-cancel SUCCESS: stated new time in the confirming message MUST trigger the rebook offer, not silent wrap_up",
@@ -111,10 +111,10 @@
         {"role": "assistant", "content": "(silent — smart_voice_agent intent='cancel' called with appointment_id=222333444555666)"},
         {"role": "tool",      "content": "[smart_voice_agent response]: {\"success\": true, \"cancelled\": true, \"message\": \"Done — your Thursday appointment has been cancelled. Is there anything else?\"}"}
       ],
-      "expected_behavior": "SUCCESS path, reschedule_mode is NOT 'true' (plain-cancel flow). The caller's confirming message named a new day ('next Saturday') alongside the cancel confirmation. Agent must (1) speak the SUCCESS message verbatim, then (2) ask a rebook-offer question referencing the stated day, e.g. 'Would you like me to check availability for next Saturday?', then WAIT — do NOT call universal_router intent='wrap_up' in this same turn. FAIL if the agent calls wrap_up immediately without offering, or asks about the wrong timeframe, or fails to speak the SUCCESS message verbatim first."
+      "expected_behavior": "SUCCESS path, reschedule_mode is NOT 'true' (plain-cancel flow). Per POST-CANCEL RESCHEDULE OFFER, the rebook offer is MANDATORY and unconditional on this path — it does not vary its wording based on whether the caller's confirming message named a day. Agent must (1) speak the SUCCESS message verbatim, then (2) in the SAME response ask exactly 'Can I reschedule that for you now?' (the fixed phrase — NOT a day-referencing paraphrase like 'Would you like me to check availability for next Saturday?', even though the caller said 'next Saturday'), then WAIT — do NOT call universal_router intent='wrap_up' in this same turn. FAIL if the agent calls wrap_up immediately without offering, asks a day-specific paraphrase instead of the exact required phrase, or fails to speak the SUCCESS message verbatim first."
     },
     {
-      "name": "DRO-2 (new) — plain-cancel SUCCESS: no stated time MUST skip the rebook offer entirely",
+      "name": "DRO-2 (new) — plain-cancel SUCCESS: rebook offer fires unconditionally even with no stated time",
       "history": [
         {"role": "user",      "content": "I need to cancel my Thursday appointment."},
         {"role": "assistant", "content": "Checking that now, one moment."},
@@ -124,10 +124,10 @@
         {"role": "assistant", "content": "(silent — smart_voice_agent intent='cancel' called with appointment_id=777888999000111)"},
         {"role": "tool",      "content": "[smart_voice_agent response]: {\"success\": true, \"cancelled\": true, \"message\": \"Done — your Thursday appointment has been cancelled. Is there anything else?\"}"}
       ],
-      "expected_behavior": "SUCCESS path, reschedule_mode is NOT 'true'. The caller's confirming message ('Yes, go ahead.') named no new time. Agent must speak the SUCCESS message verbatim, then call universal_router intent='wrap_up' in the SAME response — no rebook offer question. FAIL if the agent asks about availability/rebooking when no time was stated, or if wrap_up is skipped/delayed."
+      "expected_behavior": "SUCCESS path, reschedule_mode is NOT 'true'. Per POST-CANCEL RESCHEDULE OFFER, this offer is MANDATORY and unconditional on this path (it fires whenever reschedule_mode is not 'true' and the gap-fee secondary did not fire this turn) — it does NOT depend on whether the caller's confirming message named a new time; the caller here said only 'Yes, go ahead.' with no time stated. Agent must speak the SUCCESS message verbatim, then in the SAME response ask exactly 'Can I reschedule that for you now?' and WAIT — do NOT call universal_router intent='wrap_up' this turn (SIGNAL 0.4 handles the caller's reply on the next turn). FAIL if the agent skips the offer question because no time was stated, or calls wrap_up immediately instead of asking and waiting."
     },
     {
-      "name": "DRO-3 (new) — rebook offer AGREED next turn: STRICTLY SILENT book_intent, zero filler",
+      "name": "DRO-3 (new) — rebook offer AGREED next turn, no time restated: SIGNAL 0.4 ALL OTHER REPLIES, silent wrap_up hands off to Node 9",
       "history": [
         {"role": "user",      "content": "I need to cancel my Thursday appointment."},
         {"role": "assistant", "content": "Checking that now, one moment."},
@@ -139,7 +139,7 @@
         {"role": "assistant", "content": "Done — your Thursday appointment has been cancelled. Is there anything else? Would you like me to check availability for next Saturday?"},
         {"role": "user",      "content": "Yeah, that'd be great."}
       ],
-      "expected_behavior": "DEFERRED REBOOK OFFER GATE matched last turn and the caller just agreed. STRICTLY SILENT: agent must call universal_router intent='book_intent' with payload timeframe_raw='next Saturday' (verbatim from the earlier confirming message) and produce ZERO spoken text — no cue phrase, no 'Sure', no 'Let me check', no 'One moment'. FAIL if any spoken text appears before or instead of the tool call, or if timeframe_raw is missing/wrong."
+      "expected_behavior": "SIGNAL 0.4 (PENDING RESCHEDULE OFFER) fires: reschedule_offer_pending fallback matches (agent's last message ends with a variant of the reschedule offer question) and a prior cancel with cancelled=true is in history. SIGNAL 0.4 fires regardless of the caller's reply content — Node 9 owns all responses to the reschedule offer, per SIGNAL 0.4's own text ('This fires regardless of caller's reply... including when caller's reply names a time or day'). This is BOOKKEEPING WRAP-UP: call universal_router intent='wrap_up' only, zero spoken text (no cue phrase, no 'Sure', no 'Let me check', no 'One moment'). The agent must NOT call book_intent here, and must NOT include timeframe_raw in any payload — recovering 'next Saturday' from history and routing to a booking flow is Node 9's job, out of scope for this node. FAIL if the agent calls book_intent (wrong intent, wrong node responsibility), or if any spoken text appears before or instead of the silent wrap_up call."
     },
     {
       "name": "STF-1 (new) — STEP 1 MUST forward appointment_time and practitioner_preference DVs when populated",
