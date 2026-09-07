@@ -256,6 +256,84 @@
       "expected_behavior": "PASS if the agent says \"Happy to check another day — what suits you?\" (or close paraphrase). Both cache entries are for the SAME date (Friday the 4th), and that date was already offered (across both practitioners) and declined — a second practitioner's identical date is not a genuinely-other date. FAIL if the agent claims 'other dates' exist or re-offers Friday the 4th under a different practitioner as if it were a new option."
     },
     {
+      "name": "PSS-1 — practitioner never resolved before offer accepted: CONFIRMATION still carries the right practitioner_id",
+      "tags": ["core", "practitioner-slot-sync"],
+      "dvs": {
+        "system__called_number": "+61249871234",
+        "called_number": "+61249871234",
+        "caller_phone": "+61412345670",
+        "system__conversation_id": "conv_test_pss_unset",
+        "caller_first_name": "Jeanette",
+        "caller_last_name": "Foley",
+        "appointment_type_id": "412451910654630891",
+        "appointment_type": "New Patient Raymond Terrace",
+        "booking_for": "",
+        "current_time_local": "2026-09-06T10:00:00+10:00"
+      },
+      "history": [
+        {"role": "user", "content": "I need an appointment as soon as possible."},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "system", "content": "{\"success\": true, \"found\": true, \"practitioners\": [{\"practitioner_id\": \"412461073866693445\", \"practitioner_name\": \"Bruce Sutton\", \"business_id\": \"412584500640357006\", \"business_name\": \"Tea Gardens\", \"dates\": [{\"date\": \"2026-09-10\", \"day_of_week\": \"Thursday, September 10th\", \"slot_groups\": {\"morning\": [\"9 AM\"]}}]}], \"first_available\": {\"practitioner_name\": \"Bruce Sutton\", \"time\": \"9 AM\", \"date\": \"2026-09-10\", \"day_of_week\": \"Thursday, September 10th\", \"business_name\": \"Tea Gardens\"}}"},
+        {"role": "assistant", "content": "I have Thursday the 10th at 9 AM with Bruce Sutton at Tea Gardens — would that work?"},
+        {"role": "user", "content": "Yes, that works."}
+      ],
+      "expected_behavior": "PASS if the agent calls universal_router intent=\"confirm_time\" with practitioner_id=\"412461073866693445\", practitioner_name (or practitioner_name field) = \"Bruce Sutton\", business_id=\"412584500640357006\" — resolved from the ONE cache entry whose date/slot matches the accepted offer, even though no confirmed_practitioner_id DV was ever set anywhere in this conversation. This is the live-incident shape: Node 3 never explicitly stored a practitioner earlier, but PRACTITIONER-SLOT SYNC must still recover the correct ID from the cache immediately before confirm_time fires. FAIL if the confirm_time payload has practitioner_id empty, omitted, or wrong — this is exactly the gap that let a caller get booked with a practitioner the availability search never actually confirmed for that slot (see the Ava McNaughton/Jeanette Foley/Bruce Sutton/Raymond Terrace incident, 2026-08-24)."
+    },
+    {
+      "name": "PSS-2 — stale practitioner_id from earlier in the call is overwritten by the cache entry that actually offered the accepted slot",
+      "tags": ["core", "practitioner-slot-sync"],
+      "dvs": {
+        "system__called_number": "+61249871234",
+        "called_number": "+61249871234",
+        "caller_phone": "+61412345671",
+        "system__conversation_id": "conv_test_pss_stale",
+        "caller_first_name": "Ava",
+        "caller_last_name": "McNaughton",
+        "appointment_type_id": "412451910654630891",
+        "appointment_type": "New Patient Raymond Terrace",
+        "booking_for": "",
+        "confirmed_practitioner_id": "883714138008722063",
+        "confirmed_practitioner": "Elisa Brownhill",
+        "practitioner_services": "Bruce Sutton=New Patient Raymond Terrace;Standard Raymond Terrace|Elisa Brownhill=New Patient Raymond Terrace;Standard Raymond Terrace",
+        "practitioners_with_ids": "Bruce Sutton:412461073866693445, Elisa Brownhill:883714138008722063",
+        "current_time_local": "2026-09-06T10:00:00+10:00"
+      },
+      "history": [
+        {"role": "user", "content": "Does Bruce Sutton have anything on Thursday at Tea Gardens?"},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "system", "content": "{\"success\": true, \"found\": true, \"practitioners\": [{\"practitioner_id\": \"412461073866693445\", \"practitioner_name\": \"Bruce Sutton\", \"business_id\": \"412584500640357006\", \"business_name\": \"Tea Gardens\", \"dates\": [{\"date\": \"2026-09-10\", \"day_of_week\": \"Thursday, September 10th\", \"slot_groups\": {\"morning\": [\"9 AM\"]}}]}], \"first_available\": {\"practitioner_name\": \"Bruce Sutton\", \"time\": \"9 AM\", \"date\": \"2026-09-10\", \"day_of_week\": \"Thursday, September 10th\", \"business_name\": \"Tea Gardens\"}}"},
+        {"role": "assistant", "content": "I have Thursday the 10th at 9 AM with Bruce Sutton at Tea Gardens — would that work?"},
+        {"role": "user", "content": "Yes please."}
+      ],
+      "expected_behavior": "PASS if the confirm_time payload carries practitioner_id=\"412461073866693445\" (Bruce Sutton) — the practitioner whose cache entry actually contains the accepted Thursday-9AM slot — even though confirmed_practitioner_id DV started this turn holding Elisa Brownhill's ID (883714138008722063) from an earlier, unrelated point in the call. FAIL if the payload uses Elisa Brownhill's stale ID, or leaves practitioner_id ambiguous — trusting an already-set DV instead of the cache entry that actually offered this slot is the exact failure mode this gate exists to close."
+    },
+    {
+      "name": "PSS-3 — confirmed_time has no matching cache entry: re-fetch instead of confirming with an unverified practitioner",
+      "tags": ["core", "practitioner-slot-sync"],
+      "dvs": {
+        "system__called_number": "+61249871234",
+        "called_number": "+61249871234",
+        "caller_phone": "+61412345672",
+        "system__conversation_id": "conv_test_pss_nomatch",
+        "caller_first_name": "Priya",
+        "caller_last_name": "Nadesan",
+        "appointment_type_id": "412451910654630891",
+        "appointment_type": "New Patient Raymond Terrace",
+        "booking_for": "",
+        "confirmed_day": "Wednesday the 17th",
+        "confirmed_band": "morning",
+        "confirmed_time": "10 AM",
+        "current_time_local": "2026-09-06T10:00:00+10:00"
+      },
+      "history": [
+        {"role": "user", "content": "Any time this week please."},
+        {"role": "assistant", "content": "Checking that now, one moment."},
+        {"role": "system", "content": "{\"success\": true, \"found\": true, \"practitioners\": [{\"practitioner_id\": \"1670506736215139927\", \"practitioner_name\": \"Aine Sherry\", \"business_id\": \"412451910923065987\", \"business_name\": \"Raymond Terrace\", \"dates\": [{\"date\": \"2026-09-04\", \"day_of_week\": \"Friday, September 4th\", \"slot_groups\": {\"morning\": [\"9 AM\"]}}]}], \"first_available\": {\"practitioner_name\": \"Aine Sherry\", \"time\": \"9 AM\", \"date\": \"2026-09-04\", \"day_of_week\": \"Friday, September 4th\", \"business_name\": \"Raymond Terrace\"}}"},
+        {"role": "assistant", "content": "Sorry, something went wrong there — let me try that again for Wednesday the 17th at 10 AM."}
+      ],
+      "expected_behavior": "PASS if the agent does NOT call universal_router intent=\"confirm_time\" this turn — the only cached result is for Friday the 4th with Aine Sherry, which does not contain Wednesday the 17th at 10 AM anywhere, so no cache entry backs confirmed_time/confirmed_day. Instead the agent should say \"Checking that now, one moment.\" and call smart_voice_agent intent=\"availability\", date=confirmed_day, preferred_time=confirmed_band to refresh the cache. FAIL if the agent calls confirm_time anyway with practitioner_id empty, guessed, or copied from the unrelated Aine Sherry/Friday cache entry."
+    },
+    {
       "name": "RESCHEDULE-PREFILL-1 — same-slot appointment-type correction skips search and re-asking",
       "tags": ["reschedule-prefill"],
       "dvs": {
