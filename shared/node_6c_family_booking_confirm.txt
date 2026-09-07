@@ -11,7 +11,7 @@ smart_voice_agent success=true: OUTPUT CONTRACT — this response MUST contain (
 0.5. WAITLIST OFFER FOLLOW-UP: the agent's own most recent message in conversation history ends with "Would you like me to also add them to the waitlist in case something sooner comes up?" (or a close variant) — this is the question EXECUTE just asked instead of wrapping up, and this turn is the caller's answer to it.
    Affirmative ("yes", "yeah", "yep", "sure", "please", "yes please", "that'd be great", "go ahead", "sounds good", or equivalent agreement): say "Checking that now, one moment." and call universal_router intent="waitlist_add", called_number, caller_id, payload {"appointment_type_id": "{{appointment_type_id}}", "appointment_type": "{{appointment_type}}", "booking_for": "other", "patient_name": "{{family_member_name}}", "requested_date": "{{appointment_date}}"}. Include business_id={{business_id}} when non-empty. Once the tool result returns, speak its message field verbatim, then in the same turn call universal_router intent="wrap_up". HALT.
    Decline ("no", "no thanks", "that's okay") or any other reply with no new request: do NOT call waitlist_add. In the same turn call universal_router intent="wrap_up". HALT.
-   Reply contains a new request instead (a new cancellation, a constraint change, a detail correction): do NOT call waitlist_add and do NOT call wrap_up — evaluate the remaining signals below against this turn's message.
+   Reply contains a new request instead (a new cancellation, a constraint change, a detail correction): do NOT call waitlist_add and do NOT call wrap_up — evaluate the remaining signals below against this turn's message. A constraint/time-change request here is a post-booking replacement request — see AFTER BOOKING SUCCEEDS below, not CONSTRAINT PIVOT.
 1. CANCEL ESCAPE: caller intends to cancel → universal_router intent="cancel_intent", called_number, caller_id. HALT.
 2. WRAP-UP: caller signals end of call → universal_router intent="wrap_up", called_number, caller_id. HALT.
 3. PROFILE MOD: caller asks to update email, phone, address, or name → universal_router intent="info_pivot", called_number, caller_id. HALT.
@@ -19,9 +19,15 @@ smart_voice_agent success=true: OUTPUT CONTRACT — this response MUST contain (
    AGREED: collect name if {{patient_name_raw}} empty. Call universal_router intent="callback_request", called_number, caller_id, payload { "caller_name": "<name>", "callback_reason": "Billing enquiry." }. Speak response message. In the same turn, call universal_router intent="wrap_up". HALT.
 5. SPEAK TO PRACTITIONER: caller asks to speak to or be connected to a named person or clinic staff → system prompt CONTACT CLINIC handles message collection. If caller declines: continue with node logic below.
 
-CONSTRAINT PIVOT — fires AFTER BLOCKING SIGNALS 1–5 but BEFORE step logic (if caller changes time/date, practitioner, location, or service while still in confirmation):
+AFTER BOOKING SUCCEEDS — checked AFTER BLOCKING SIGNALS 1–5 but BEFORE CONSTRAINT PIVOT below (fires once STEP 3 EXECUTE has already returned success=true earlier this conversation — a booking confirmation message or the waitlist question has already been spoken to the caller):
+A replacement mention ("wrong time", "can we do Wednesday instead", "not Mark", "different practitioner") needs a cancel-and-rebook, not a plain constraint change: say "I'm sorry about that — let me cancel that booking and rebook you straight away." and call universal_router intent="cancel_intent", called_number, caller_id, payload {reschedule_mode: true}. HALT. (A plain "cancel it" with no replacement mentioned is an ordinary cancellation — BLOCKING SIGNAL 1 CANCEL ESCAPE already covers that correctly.)
+Caller wants to hear or browse other available times without stating a firm replacement yet ("I'd like to hear other times", "what else do you have that day", "any other options", "what other times are there") → treat the same as a replacement mention: say "Sure — let me check what else is available. One moment." and call universal_router intent="cancel_intent", called_number, caller_id, payload {reschedule_mode: true}. HALT. Do NOT use CONSTRAINT PIVOT/change_time here — CONSTRAINT PIVOT is scoped to before booking has succeeded, and change_time only clears the search criteria without touching the completed booking, so a caller who then picks a different time would end up with two separate appointments instead of one moved appointment.
+Anything else the caller says once the booking has already succeeded, that isn't covered by a block above → universal_router intent="wrap_up", called_number, caller_id. HALT. There's nothing left for this node to do once booking is complete.
+
+CONSTRAINT PIVOT (before booking has succeeded) — fires AFTER BLOCKING SIGNALS 1–5 AND the AFTER BOOKING SUCCEEDS check above, but BEFORE step logic (if caller changes time/date, practitioner, location, or service while still in confirmation, and no booking has succeeded yet this call):
 Call universal_router intent="change_[time|practitioner|location|service]", called_number, caller_id. HALT.
 Payload: called_number and caller_id only — never include the new values.
+SCOPED EXCEPTION: this does NOT apply once a booking has already succeeded this call — see AFTER BOOKING SUCCEEDS above, which fires first and handles that case with cancel_intent + reschedule_mode instead.
 
 BOOKING PARTY CORRECTION (if caller reveals booking is actually for themselves):
 Call universal_router intent="booking_self", called_number, caller_id, payload { booking_for: "", resolved_patient_id: "none", family_member_name: "" }. HALT.
@@ -81,8 +87,11 @@ Caller: "Yeah that's right" (step 1 confirm)
 Caller: "Actually it's for Tom, not Jake"
 → Step 1 correction. Speak one filler phrase from the TOOL-CALL FILLER set, then call smart_voice_agent intent="lookup_family", family_member_name="Tom". Await result.
 
-Caller: "Can we do a different time?" (during step 1 or step 3)
-→ CONSTRAINT PIVOT. Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="change_time". HALT. Do NOT ask the confirmation question first.
+Caller: "Can we do a different time?" (during step 1, or during step 3 before the EXECUTE result has returned)
+→ CONSTRAINT PIVOT (before booking has succeeded). Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="change_time". HALT. Do NOT ask the confirmation question first.
+
+Caller: "Actually, can we do a different time instead?" (step 3 EXECUTE already returned success=true — a booking confirmation or the waitlist question has already been spoken)
+→ AFTER BOOKING SUCCEEDS. Say "I'm sorry about that — let me cancel that booking and rebook you straight away." AND call universal_router intent="cancel_intent", payload {reschedule_mode: true}. HALT. Do NOT call change_time here — the booking already succeeded, so change_time alone would leave the original appointment intact and create a duplicate once a new time is picked.
 
 Caller: "I want to cancel" (any point)
 → BLOCKING SIGNAL 1. Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router intent="cancel_intent". HALT. Do NOT complete the booking.
