@@ -393,6 +393,33 @@ Never include price in a duration selection question. Ask "45 or 60 minutes?" no
 
 ---
 
+## "How much are they all?" — whole-category price asks
+
+A caller answering a duration question with "how much are they all?" must get every price in one
+turn. Two things make that work, and both were broken until 2026-09-09:
+
+1. **The backend expands the duration family, the prompt never enumerates it.** A price ask sends
+   ONE `appointment_type_id` (or a plain service name) plus `all_durations: "true"`;
+   `tools/service_families.py` groups the clinic's catalogue by a duration-independent name key and
+   returns every sibling. Never instruct a node to call the price tool once per duration — it
+   reliably calls it once and invents the rest.
+2. **Never ask a node to format the array itself.** The tool returns a pre-composed
+   `spoken_summary` ("60 minutes is $160, 75 minutes is $190, and 90 minutes is $220.") — the node
+   speaks that verbatim. Every version that asked the LLM to build the sentence from `prices[]`
+   produced a real price for the variant it looked up and a fabricated or evasive answer for the
+   rest ("for the 75, 90, and 120-minute options, check directly with the clinic" —
+   conv_8301m229bngcee9rp8528dqjch0v).
+
+**Node 8 trap:** its PRICING AND DURATION INTERCEPT STEP 1 asks the caller to pick a duration when
+several variants exist. That clarification must be gated behind an ALL-OPTIONS check, or a caller
+asking about all of them is bounced back to picking one.
+
+**Never tell a node to speak the tool's `note` field.** It is an instruction addressed to the
+assistant, not caller-facing text; the shared system prompt said "speak `note` field verbatim" and
+would have read the instruction aloud.
+
+---
+
 ## Prompt fix regression risks
 
 ### Pre-fix regression checklist — run before touching any node prompt
