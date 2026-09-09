@@ -43,6 +43,23 @@ WRONG: Call confirm_service immediately. (FORBIDDEN)
 CORRECT: Ask "Would you like 45 or 60 minutes?" HALT.
 ```
 
+### NO-DEFAULT RULE — now structural, baked into the SUBTYPE+GATE / GATE+DURATION archetype templates
+**Bug (feel_heal, 2026-09-09):** Caller says only a bare category name with zero other detail — "I wanna book dry needling" — and Haiku skips straight past BOTH the mandatory tier question ("standard or premium with Ning?") AND the duration question, calling confirm_service immediately with a silently-invented default (standard, 60 min). This is the zero-prior-turns variant of the bug above — the MANDATORY SEQUENCE fix (previous entry) only covers the case where TURN 0's gate question was already answered; this one had no prior turn at all, so the model had nothing anchoring it to "there are more questions coming" except the branch's own step-numbered prose, which wasn't enough under call pressure.
+**Root cause:** neither `nodes/node2_templates/branches/_subtype_gate.txt` nor `_gate_duration.txt` — the two archetype sub-templates every multi-step Node 2 branch renders from — carried any structural protection against this. Protection existed only where a past session happened to hand-author a BLOCKING EXAMPLE into that specific clinic's branch slot text in `scripts/node2_configs.py`. A fleet scan the same day found **20 branches across 9 other clinics** with the identical exposure (acacia_healing, alpine_osteopaths, cascade_womens_health, intuitive_health_and_wellness, meraki_holistic_health, palm_beach_osteopathy, speeding_health, the_rehab_podiatrist, totally_well) — none of them had ever been caught because nothing tests "caller states a bare category name with nothing else" by default.
+**Fix (structural, 2026-09-09):** added a generic `NO-DEFAULT RULE` line directly into both archetype template files, immediately after the `### <<BRANCH_NAME>>` header — the point of entry into the branch, highest-attention position, evaluated before any of the branch's own step prose:
+```
+NO-DEFAULT RULE: Once <<BRANCH_NAME>> is matched from the caller's message, every mandatory
+sub-type, tier, or duration question below is required before any tool call -- there is no
+default answer for a question the caller has not yet answered. WRONG: call confirm_service
+using a default sub-type, tier, or duration for any question not yet answered. CORRECT: ask
+each unanswered mandatory question in turn, HALT after each one, and call confirm_service only
+once every question is answered (or already resolved via a TIER RESOLUTION step or an explicit
+statement the caller already made).
+```
+Every clinic regenerated via `generate_node2.py` on a `SUBTYPE+GATE` or `GATE+DURATION` branch now gets this automatically — **no per-clinic authoring required going forward**, including new clinics onboarded after this date. A clinic-specific concrete `BLOCKING EXAMPLE` (naming the actual caller phrase, per the entry above) is still worth adding on top for any branch a live call has actually caught defaulting — concrete beats generic, per node-prompt-style.md's Haiku Instruction Patterns — but the generic template guard is now the floor every branch gets, not the ceiling.
+**Self-audit:** `Agent(model="haiku")`, one probe per archetype (a plain gate+duration branch and the fleet's most complex `SUBTYPE+GATE` branch, 6+ sub-types) — see `docs/AI_HANDOFF.md` or ask for the session that shipped this for the scores.
+**Gap this does NOT cover:** `RAW`-archetype branches (raw hand-written `text`, bypassing both templates entirely) get nothing from this fix — any clinic with a multi-question `RAW` branch still needs a manually-authored guard. Check `br.get('archetype') == 'RAW'` in `scripts/node2_configs.py` before assuming a clinic is covered.
+
 ### CONCERN-GUIDED RESOLUTION — two-trigger acknowledgement
 **Bug:** Caller complaint captured by Node 1 but silently dropped when Node 2 resolves.  
 **Fix:** Acknowledgement on the FIRST spoken question turn, TWO triggers:
