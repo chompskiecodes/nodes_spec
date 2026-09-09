@@ -1,5 +1,30 @@
 # Ryde Health — Practitioner Due / Complaint Intake Integration
 
+## Status (2026-09-09)
+
+Ryde unretired 2026-09-09. Audited Node 2C against the live agent before it took real calls
+again: it was live and reachable (Node 1's edge into it was fine) but had **zero outbound
+edges** — a dead end for any caller routed there. Root cause, best guess from the dates: the 6
+outbound edges were applied 2026-04-10 via `patch_node2c_edges_ryde.py`, then wiped 5 days later
+by the documented 2026-04-15 incident (a `batch_patch.py` run missing `--no-strict-edges` wiped
+edges fleet-wide for nodes outside the patched folder) — and the original script was itself
+deleted in the 2026-07-15 retirement cleanup.
+
+Re-applied via a successor `patch_node2c_edges_ryde.py` (this folder) on 2026-09-09: restored
+all 7 outbound edges + the Node 2→8 backward-condition tightening. Verified live and deployed.
+
+**`due_router` (tool_6401k18fpvbrfcsv7d63p967n3vz) was deliberately NOT wired to Node 2C.**
+Checked its live config: it's a test/demo variant of the voice-agent webhook with
+`called_number` and `conversation_id` hardcoded to fake constants (see
+`smart_voice_agent_config.py` `DUE_ROUTER_*_CONSTANT`) — wiring it into a node that takes real
+calls would send fake caller data to the backend for every call. Node 2C's `smart_voice_agent`
+wiring is correct as-is.
+
+Still outstanding, not done in this pass: Node 3's "DUE-PRACTITIONER JUSTIFICATION" block was
+lost to a later `generate_node3.py` regeneration (no `patches` entry preserves it for
+`ryde_health`) — needs re-adding via that generator's `CLINIC_CONFIGS` + a normal Node 3 patch.
+
+
 Adapts the agent_7101kkp2ajcjf21tj7mrv59rhkj5 single-prompt scaffold (complaint
 classification + due-rank practitioner selection) into the multi-node Ryde
 Health agent (`agent_4001knngjghcfwna069y6jjd6f2v`) as a new node:
