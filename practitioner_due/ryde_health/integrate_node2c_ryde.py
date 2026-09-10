@@ -65,7 +65,11 @@ NODE_11  = "node_01kbgm46v9fvgv43n0m989n3f0"
 
 TOOL_SMART_VOICE_AGENT = "tool_4501k96qzckzemabz9rwppjms6zj"
 TOOL_UNIVERSAL_ROUTER  = "tool_9401k7e4bc90fw7avkmysavqhj91"
-TOOL_ASYNC_CAPTURE     = "tool_3101km7k126qezfsqcxdxfdesdd8"
+# tool_3101km7k126qezfsqcxdxfdesdd8 (async_capture_context) was decommissioned 2026-06-11
+# (commit ed500d17) -- the ID now 404s. details_ack is the fleet-standard third tool every
+# other node carries (backs the shared system prompt's PATIENT APPOINTMENT LOOKUP flow, which
+# this node's ESCAPE ROUTE 1 delegates to). Confirmed live on Node 2C 2026-09-11.
+TOOL_DETAILS_ACK       = "tool_9301kw12gm3jfecbzq20bpf6kzgw"
 
 DOC1_FILE   = SCRIPT_DIR / "doc1_complaint_mapping.txt"
 DOC2_FILE   = SCRIPT_DIR / "doc2_practitioner_constraints.txt"
@@ -257,7 +261,7 @@ def _build_node2c_stub(kb1_id: str, kb2_id: str) -> dict:
         "additional_tool_ids": [
             TOOL_SMART_VOICE_AGENT,
             TOOL_UNIVERSAL_ROUTER,
-            TOOL_ASYNC_CAPTURE,
+            TOOL_DETAILS_ACK,
         ],
         "edges": [],
         "edge_order": [],

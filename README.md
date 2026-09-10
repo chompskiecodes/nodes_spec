@@ -44,22 +44,33 @@ Every clinic agent uses these same node IDs:
 
 Tools are attached **at the node level** via `workflow.nodes.<node_id>.additional_tool_ids`, NOT agent-level.
 
+Table below reconfirmed live 2026-09-11 by fetching two agents in full (Intuitive Health and
+Wellness, Ryde Health) via the ElevenLabs API — `async_capture_context` no longer exists on
+any node on either agent (the tool itself 404s — decommissioned 2026-06-11, commit ed500d17).
+Every node carries `details_ack` instead, which did not exist when this table was last written:
+
 ```
-Node 11 (Error Recovery):       [universal_router]
-Node 1  (Entry Router):         [async_capture, universal_router]
-Node 2  (Service Resolution):   [universal_router]
-Node 3  (Availability):         [smart_voice, universal_router]
-Node 6a/6b/6c (Name Collect):   [universal_router, smart_voice, async_capture]
-Node 7  (Cancellation):         [universal_router, smart_voice]
-Node 7b (Rescheduler):          [universal_router, smart_voice]
-Node 8  (Information):          [universal_router, smart_voice]
-Node 9  (Wrap Up):              [async_capture, universal_router]
+Node 1  (Entry Router):         [universal_router, details_ack]
+Node 2  (Service Resolution):   [universal_router, details_ack]
+Node 3  (Availability):         [universal_router, smart_voice, details_ack]
+Node 6a/6b/6c (Name Collect):   [universal_router, smart_voice, details_ack]
+Node 7  (Cancellation):         [universal_router, smart_voice, details_ack]
+Node 7b (Rescheduler):          [universal_router, smart_voice, details_ack]
+Node 8  (Information):          [universal_router, smart_voice, details_ack]
+Node 9  (Wrap Up):              [universal_router, details_ack]
+Node 11 (Error Recovery):       [universal_router, details_ack]
 ```
 
 **Primary tool IDs (use these — never the backup/ghost variants):**
 - `universal_router` → `tool_9401k7e4bc90fw7avkmysavqhj91`
-- `async_capture_context` → `tool_3101km7k126qezfsqcxdxfdesdd8`
+- `details_ack` → `tool_9301kw12gm3jfecbzq20bpf6kzgw` (acks the shared system prompt's PATIENT
+  APPOINTMENT LOOKUP delivery; webhook `POST /api/v1/webhook/details-ack`)
 - `smart_voice_agent` → `tool_4501k96qzckzemabz9rwppjms6zj`
+
+`async_capture_context` (`tool_3101km7k126qezfsqcxdxfdesdd8`) is decommissioned — do not attach
+it in any new node. Context capture is now silent CONTEXT PIGGYBACK onto whichever routing call
+fires next (see `nodes/shared/system_prompt.txt`'s CONTEXT PIGGYBACK block); no dedicated tool
+call replaces it.
 
 `create_new_agent.py` does NOT set `additional_tool_ids` — patch separately after creation.
 

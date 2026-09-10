@@ -25,6 +25,43 @@ lost to a later `generate_node3.py` regeneration (no `patches` entry preserves i
 `ryde_health`) — needs re-adding via that generator's `CLINIC_CONFIGS` + a normal Node 3 patch.
 
 
+## Status (2026-09-11) — async_capture_context doc drift investigated, resolved as harmless
+
+Investigated a discrepancy: the live Ryde agent has `details_ack` (`tool_9301kw12gm3jfecbzq20bpf6kzgw`)
+as Node 2C's third tool, but this README and `node_2c_create_node_payload.json` documented
+`async_capture_context` (`tool_3101km7k126qezfsqcxdxfdesdd8`).
+
+**Verdict: doc drift only, live wiring was already correct — no live-agent patch needed.**
+
+- `async_capture_context` was retired conceptually 2026-05-04 (commit e54922a2 — context capture
+  became silent CONTEXT PIGGYBACK, no dedicated tool call) and the tool itself was deleted from
+  ElevenLabs 2026-06-11 (commit ed500d17). Confirmed via live API GET 2026-09-11: the tool ID
+  now returns `404 document_not_found`.
+- `details_ack` (GET confirmed live, webhook `POST /api/v1/webhook/details-ack`) is the
+  fleet-standard tool every node carries — it acks the shared system prompt's PATIENT
+  APPOINTMENT LOOKUP delivery (`nodes/shared/system_prompt.txt`). Node 2C's own ESCAPE ROUTE 1
+  explicitly delegates to that flow ("use the system prompt's PATIENT APPOINTMENT LOOKUP
+  (universal_router intent="details") instead"), so Node 2C needs `details_ack` independently
+  of anything async_capture_context ever did.
+- Fetched the full live Ryde agent (`agent_4001knngjghcfwna069y6jjd6f2v`) and a second clinic
+  (Intuitive Health and Wellness) via the ElevenLabs API 2026-09-11: every node on both agents
+  carries `[universal_router, details_ack]` (+`smart_voice_agent` where relevant) — Node 2C
+  matches this exactly. Zero nodes fleet-wide reference the dead async_capture_context tool ID.
+- `node_2c_complaint_intake.txt`'s own TOOL ROLES section never mentioned async_capture_context
+  or details_ack by name (correctly — details_ack is a shared-system-prompt-level tool, not
+  restated per-node per `.claude/rules/node-prompt-style.md` "Don't repeat system-level rules").
+  So there was nothing to fix in the prompt body itself.
+- Fixed in this pass (doc-only, no live patch): this README, `node_2c_create_node_payload.json`'s
+  `additional_tool_ids` + comment, and `integrate_node2c_ryde.py`'s `TOOL_ASYNC_CAPTURE` constant
+  (renamed `TOOL_DETAILS_ACK`, dead ID→`tool_9301kw12gm3jfecbzq20bpf6kzgw`) — the script still had
+  the dead ID hardcoded and would have wired the wrong (nonexistent) tool if ever re-run via
+  `--from-step`.
+- Separately found (not fixed here, out of scope of Node 2C): `nodes/README.md`'s "Tool
+  assignment per node" table and `nodes/REVISED_master_workflow_updated.txt` also had stale
+  async_capture_context references — `nodes/README.md` fixed same session; the master workflow
+  doc's stale claim that the tool is "still attached to Nodes 1, 6a, 6b, 9" is disproven by the
+  same live fetches above but was left for a separate pass.
+
 Adapts the agent_7101kkp2ajcjf21tj7mrv59rhkj5 single-prompt scaffold (complaint
 classification + due-rank practitioner selection) into the multi-node Ryde
 Health agent (`agent_4001knngjghcfwna069y6jjd6f2v`) as a new node:
@@ -35,7 +72,7 @@ Health agent (`agent_4001knngjghcfwna069y6jjd6f2v`) as a new node:
 | File | Purpose |
 |---|---|
 | `node_2c_complaint_intake.txt` | Full prompt body for Node 2C. Lift verbatim into the patch payload. Includes DOC 1, DOC 2, SERVICE ID LOOKUP, PRACTITIONER LOOKUP inline. |
-| `node_2c_create_node_payload.json` | Empty-prompt creation stub for the new node. Tools wired: due_router, universal_router, async_capture_context. Use this to create the node first, then patch the prompt body in a follow-up. |
+| `node_2c_create_node_payload.json` | Empty-prompt creation stub for the new node. Tools wired: smart_voice_agent, universal_router, details_ack (due_router was the original plan but was swapped for smart_voice_agent — see Status section above; async_capture_context was the original third tool but was decommissioned 2026-06-11 — see Status (2026-09-11) below). Use this to create the node first, then patch the prompt body in a follow-up. |
 | `research_prompt_kb_injection.md` | Hand to another AI to research whether ElevenLabs KB documents are injected verbatim for small KBs vs RAG-chunked. Decides whether DOC 1/2 stay inline or move to KB. |
 | `research_prompt_universal_router.md` | Hand to another AI to add the `complaint_intake` pass-through intent to `tools/universal_router_webhook.py`, plus add `caller_complaint` to `CONTEXT_FIELD_SPEC`. |
 | `README.md` | This file. Integration order, open questions, deferred work. |
@@ -54,7 +91,10 @@ Health agent (`agent_4001knngjghcfwna069y6jjd6f2v`) as a new node:
 | smart_router | `tool_4501k96qzckzemabz9rwppjms6zj` |
 | smart_voice_agent | `tool_4501k96qzckzemabz9rwppjms6zj` |
 | universal_router | `tool_9401k7e4bc90fw7avkmysavqhj91` |
-| async_capture_context | `tool_3101km7k126qezfsqcxdxfdesdd8` |
+| details_ack | `tool_9301kw12gm3jfecbzq20bpf6kzgw` |
+
+`async_capture_context` (`tool_3101km7k126qezfsqcxdxfdesdd8`) is decommissioned — see Status
+(2026-09-11) below. Do not use it in any future patch.
 
 ## Integration patch order
 
@@ -121,12 +161,23 @@ verbatim, attach DOC 2 to Node 3's KB instead of duplicating it inline. Then
 add a Node 3 prompt section that scans the focus lists and surfaces a
 matching practitioner from `stored_recommendations[]` even if not first-ranked.
 
-### C. async_capture_context vs `async_router`
+### C. async_capture_context vs `async_router` — RESOLVED 2026-09-11, superseded
 
-User mentioned `async_router` as a future tool. Currently using
-`async_capture_context` (already wired across the rest of the workflow).
-When `async_router` ships as a separate tool/webhook, add it to Node 2C's
-`additional_tool_ids` and update the prompt's "TOOL ROLES" line.
+This section originally deferred a decision between `async_capture_context` (then wired
+fleet-wide) and a future `async_router` tool. Overtaken by events: `async_capture_context`
+was retired fleet-wide 2026-05-04 (commit e54922a2 — context capture became silent CONTEXT
+PIGGYBACK onto whichever routing call fires next, no dedicated tool call) and the tool itself
+was deleted from ElevenLabs 2026-06-11 (commit ed500d17 — `tool_3101km7k126qezfsqcxdxfdesdd8`
+now 404s). `async_router` was never built. Node 2C does not need either — it does not do
+standalone async context capture at all; its own dynamic variables arrive pre-populated by
+Node 1 (see ENTRY: CONTEXT SCAN) and its own captures ride along on universal_router/
+smart_voice_agent payloads per the inherited CONTEXT PIGGYBACK rule.
+
+Node 2C's actual third tool, confirmed live 2026-09-11, is `details_ack`
+(`tool_9301kw12gm3jfecbzq20bpf6kzgw`) — required because this node's ESCAPE ROUTE 1 delegates
+to the shared system prompt's PATIENT APPOINTMENT LOOKUP flow, which needs it. This matches
+the tool set on every other node in this agent (and fleet-wide) exactly. See "Status
+(2026-09-11)" above for the investigation that confirmed this.
 
 ## Verification before patching
 
