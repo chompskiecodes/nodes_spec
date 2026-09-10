@@ -1,49 +1,61 @@
 {
-  "_comment": "Tests the KYND FEES REDIRECT patch (never quotes a price — Halaxy charge items aren't linked to either service) and its CALLBACK NUMBER GATE, added 2026-09-11 after a live call (conv_0901m25pbmfkf0e92dsz12tsg4eh) where the Agreed branch promised a callback with no caller_id check and the model improvised 'call you back on the number you're calling from' — false, since no caller ID was present on that call.",
+  "_comment": "KYND FEES REDIRECT retired 2026-09-11 (halaxy-time-of-day-pricing-design.md Phase 2) -- both services now resolve to a real linked price ($275 standard / $295 after 5pm, migration 305+307), so Node 8 quotes a real two-tier price instead of redirecting to a callback. These scenarios replace the old KFR1-KFR4 set, which tested the now-retired redirect. build_after_hours_pricing_patch() in scripts/generate_node8.py is the reusable builder behind this patch -- any future after-hours-priced clinic should get an equivalent scenario set.",
   "scenarios": [
     {
-      "name": "KFR1 — price question triggers the fees-vary redirect, not a dollar figure",
+      "name": "AHP1 — plain price ask with no time given states both tiers",
       "tags": ["core"],
       "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
       "history": [
         {"role": "user", "content": "How much does a session with Navid cost?"}
       ],
-      "expected_behavior": "PASS if the node never calls smart_voice_agent with intent get_service_price, and the spoken output is (or is equivalent to) 'Our fees vary depending on your circumstances and Medicare rebate eligibility — I can have the practice follow up with exact pricing. Would you like me to arrange that?' with no dollar figure stated. FAIL if any price or dollar amount is spoken, or if get_service_price/get_service_price_and_duration is called."
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_price with the matched appointment_type_id and NO appointment_time (no specific time was stated), then, once the tool result returns with price=$275 and after_hours_price=$295/after_hours_from=5:00 PM, states BOTH tiers in one sentence (e.g. 'It's $275 for a standard session, or $295 for a session starting at or after 5:00 PM.') and never speaks the note field verbatim. FAIL if only one price is stated, if the note field is spoken, or if the node redirects to a callback offer instead of quoting a price."
     },
     {
-      "name": "KFR2 — caller_id empty triggers CALLBACK NUMBER GATE (asks for number, zero tool calls)",
-      "tags": ["core", "callback-number-gate"],
+      "name": "AHP2 — caller names a time before the after-hours threshold resolves to the standard price only",
+      "tags": ["core", "after-hours-time-capture"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "How much for a 2pm session with Navid?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_price with appointment_type_id AND appointment_time reflecting '2pm'/'14:00', then states only the standard price (e.g. 'It's $275.') once the tool result returns price=$275 with no after_hours_price field (time resolved before the 5pm threshold). FAIL if appointment_time is omitted from the payload, or if both tiers are spoken despite a specific pre-5pm time being given."
+    },
+    {
+      "name": "AHP3 — caller names a time at/after the after-hours threshold resolves to the after-hours price only",
+      "tags": ["core", "after-hours-time-capture"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "What's the price for a 6pm appointment?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_price with appointment_type_id AND appointment_time reflecting '6pm'/'18:00', then states only the resolved price (e.g. 'It's $295.') once the tool result returns price=$295 with no after_hours_price field (time resolved at/after the 5pm threshold, so the backend already collapsed it to one tier). FAIL if appointment_time is omitted, or if the node asks the caller to pick a tier instead of trusting the resolved single price."
+    },
+    {
+      "name": "AHP4 — vague time-of-day word ('evening') is ambiguous, still states both tiers",
+      "tags": ["after-hours-time-capture"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "How much is an evening session?"}
+      ],
+      "expected_behavior": "PASS if the node sends appointment_time='evening' (or omits it) and, since a band word cannot resolve to one clock time, the tool result still returns both price and after_hours_price — the node states both tiers and the 5:00 PM split, exactly as in AHP1. FAIL if the node guesses a single tier for a vague band word, or fabricates a specific time the caller did not state."
+    },
+    {
+      "name": "AHP5 — duration-only ask is unaffected by the pricing change",
+      "tags": ["core", "regression"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "How long does a session with Navid go for?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_duration (no price intent, no appointment_time needed) and states only the duration once the tool returns (e.g. 'It runs for 50 minutes.'). FAIL if the node calls a price intent, mentions any dollar figure, or asks about a specific time."
+    },
+    {
+      "name": "AHP6 — price_unavailable fallback still works if the service has no linked price",
+      "tags": ["regression"],
       "dvs": {"caller_id": "", "caller_phone": ""},
       "history": [
-        {"role": "user", "content": "How much does a session with Navid cost?"},
-        {"role": "assistant", "content": "Our fees vary depending on your circumstances and Medicare rebate eligibility — I can have the practice follow up with exact pricing. Would you like me to arrange that?"},
+        {"role": "user", "content": "How much does a session cost?"},
+        {"role": "assistant", "content": "I don't have the exact price for that on hand — would you like me to have the practice call you back with it?"},
         {"role": "user", "content": "Yes please."}
       ],
-      "expected_behavior": "PASS if the entire output this turn is a question asking for the best callback number (e.g. 'And what's the best number to reach you on?') with ZERO tool calls, and the node does NOT claim it will call back on the number the caller is calling from. FAIL if node calls universal_router intent='callback_request' this turn without first asking for a number (since {{caller_id}} is empty), or if it says anything implying a callback number is already known — this is the exact live failure from conv_0901m25pbmfkf0e92dsz12tsg4eh."
-    },
-    {
-      "name": "KFR3 — number given after gate fires callback_request with caller_phone in payload",
-      "tags": ["callback-number-gate"],
-      "dvs": {"caller_id": "", "caller_phone": ""},
-      "history": [
-        {"role": "user", "content": "How much does a session with Navid cost?"},
-        {"role": "assistant", "content": "Our fees vary depending on your circumstances and Medicare rebate eligibility — I can have the practice follow up with exact pricing. Would you like me to arrange that?"},
-        {"role": "user", "content": "Yes please."},
-        {"role": "assistant", "content": "And what's the best number to reach you on?"},
-        {"role": "user", "content": "It's 0422 118 337."}
-      ],
-      "expected_behavior": "PASS if node speaks one filler phrase AND calls universal_router intent='callback_request' in the SAME turn with a payload that includes a caller_phone field derived from '0422 118 337' — omitting caller_phone here is a protocol violation, since it is the only number the clinic will have to call the caller back on. FAIL if caller_phone is missing from the payload, or if the node asks for the number again instead of firing the tool."
-    },
-    {
-      "name": "KFR4 — caller_id already set skips the gate, goes straight to EXECUTE",
-      "tags": ["core", "callback-number-gate"],
-      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567", "caller_first_name": "Priya"},
-      "history": [
-        {"role": "user", "content": "How much does a session with Navid cost?"},
-        {"role": "assistant", "content": "Our fees vary depending on your circumstances and Medicare rebate eligibility — I can have the practice follow up with exact pricing. Would you like me to arrange that?"},
-        {"role": "user", "content": "Yes please."}
-      ],
-      "expected_behavior": "PASS if node skips the callback-number question entirely (since {{caller_id}} is already set) and goes straight to EXECUTE: speaks one filler phrase AND calls universal_router intent='callback_request' with payload caller_name='Priya' and a pricing-related callback_reason. FAIL if node asks 'what's the best number to reach you on' despite caller_id already being set."
+      "expected_behavior": "PASS if, given a hypothetical price_unavailable=true tool result, the node's CALLBACK NUMBER GATE fires (asks for the best number to reach the caller on, zero tool calls) since {{caller_id}} is empty, then on the next turn calls universal_router intent=callback_request with caller_phone included. This is a regression check that the pre-existing price_unavailable branch (unchanged by this patch) still works. FAIL if the gate is skipped or caller_phone is omitted from the payload."
     }
   ]
 }
