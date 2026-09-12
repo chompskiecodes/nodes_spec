@@ -1,0 +1,42 @@
+{
+  "_comment": "Day-of-week/public-holiday surcharge patch added 2026-09-12 (docs/cliniko-day-of-week-holiday-surcharge-design.md) -- Physio Cure's KB states a $10 Saturday / $15 Sunday / $20 public-holiday surcharge, backed by 3 real Cliniko billable_items previously unlinked to any appointment type (migration 309, cliniko_day_surcharges table). build_day_surcharge_pricing_patch() in scripts/generate_node8.py is the reusable builder behind this patch -- any future Cliniko clinic with a confirmed day-of-week surcharge should get an equivalent scenario set.",
+  "scenarios": [
+    {
+      "name": "DSP1 — price ask naming a Saturday states base price plus surcharge total",
+      "tags": ["core"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "How much is a private initial consultation on Saturday?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_price with the matched appointment_type_id (e.g. 1167091570785125832) AND appointment_date reflecting 'Saturday', then, once the tool result returns price=$160, day_surcharge_price=$10, day_surcharge_label='Saturday surcharge', total_price_with_surcharge=$170, states the total inclusive of the surcharge (e.g. 'It's $160, plus a Saturday surcharge of $10 for that date, so $170 in total.') and never speaks the note field verbatim. FAIL if appointment_date is omitted from the payload, if only the base $160 is quoted with no mention of the surcharge, or if the note field is spoken."
+    },
+    {
+      "name": "DSP2 — plain price ask with no date given states only the base price (fleet-safe regression)",
+      "tags": ["core", "regression"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "How much is a private initial consultation?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_price with the matched appointment_type_id and no appointment_date (no day/date was stated or already known), then, once the tool result returns only price=$160 with no day_surcharge_price field, states just 'It's $160.' with no surcharge mentioned. FAIL if the node invents a date, asks an unnecessary clarifying question about which day, or mentions a surcharge with no date-carrying tool result to justify it."
+    },
+    {
+      "name": "DSP3 — duration-only ask is unaffected by the surcharge patch",
+      "tags": ["core", "regression"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "user", "content": "How long does the initial consultation take?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_duration (no price intent, no appointment_date needed) and states only the duration once the tool returns (e.g. 'It runs for 40 minutes.'). FAIL if the node calls a price intent, mentions any dollar figure or surcharge, or asks about a specific day/date."
+    },
+    {
+      "name": "DSP4 — caller already has a Saturday slot offered this call, date is reused without re-asking",
+      "tags": ["day-surcharge-date-capture"],
+      "dvs": {"caller_id": "+61491234567", "caller_phone": "+61491234567"},
+      "history": [
+        {"role": "assistant", "content": "I have Saturday the 12th of September at 10am available for a Private Initial Consultation — would that work?"},
+        {"role": "user", "content": "Actually, before I confirm, how much will that cost?"}
+      ],
+      "expected_behavior": "PASS if the node calls smart_voice_agent intent=get_service_price with the matched appointment_type_id AND appointment_date reflecting the already-offered Saturday date (not asking the caller to restate it), then states the surcharge-inclusive total once returned. FAIL if the node asks the caller what date they mean when a specific date was already offered this call, or omits appointment_date despite the date being known."
+    }
+  ]
+}
