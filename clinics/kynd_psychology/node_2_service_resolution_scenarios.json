@@ -1,5 +1,5 @@
 {
-  "_comment": "Scenario battery for kynd_psychology's node_2's HEADCOUNT GATE (docs/halaxy-fee-tier-design.md's Couples Therapy promotion). Replaces the earlier fleet-wide/universal ATTENDEE GATE design (which asked headcount before ANY category was known) with a gate scoped to the IN_PERSON_THERAPY branch only -- per 2026-09-13 user feedback, Couples Therapy must not be surfaced in the first question (MENU_LIST/practitioner-only listing), and the headcount question should only be asked once the caller has chosen In-Person. ONLINE_THERAPY stays a pure direct-route branch with no headcount check at all. Covers only the behaviour unique to this change -- the pre-existing CATEGORY TABLE keyword matching and COUPLES_THERAPY payload shape are unchanged.",
+  "_comment": "Scenario battery for kynd_psychology's node_2's HEADCOUNT GATE (docs/halaxy-fee-tier-design.md's Couples Therapy promotion). Replaces the earlier fleet-wide/universal ATTENDEE GATE design (which asked headcount before ANY category was known) with a gate scoped to the IN_PERSON_THERAPY branch only -- per 2026-09-13 user feedback, Couples Therapy must not be surfaced in the first question (MENU_LIST/practitioner-only listing), and the headcount question should only be asked once the caller has chosen In-Person. ONLINE_THERAPY stays a pure direct-route branch with no headcount check at all. HG9/HG10 cover a live bug found the same day (conv_2801m2ddpwxae26scphrqn5yr0wq): a caller's headcount-gate answer ('my wife is coming') was misread downstream as third-party ('booking_for=other') language, routing the call into the wrong other-party name-collection flow and never collecting the partner's real name. Fix: every confirm_service call from this clinic's branches now unconditionally sends booking_for='self', and the COUPLES_THERAPY branch also opportunistically captures the partner's name via additional_attendee_name_raw when stated unprompted. Covers only the behaviour unique to these changes -- the pre-existing CATEGORY TABLE keyword matching is unchanged.",
   "scenarios": [
     {
       "name": "HG1 -- bare 'book' opener asks the 2-way MENU_LIST, not a headcount question and not Couples Therapy",
@@ -29,7 +29,7 @@
         {"role": "assistant", "content": "Just to check -- will this session be just for you, or will someone else, like a partner, be joining you?"},
         {"role": "user", "content": "Just me."}
       ],
-      "expected_behavior": "PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='confirm_service' with payload appointment_type_id='586403', appointment_type='In-Person Therapy - Kew', with NO party_size_raw field. FAIL if the agent asks the HEADCOUNT GATE question again. FAIL if it routes to COUPLES_THERAPY (10338861) instead."
+      "expected_behavior": "PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='confirm_service' with payload appointment_type_id='586403', appointment_type='In-Person Therapy - Kew', booking_for='self', with NO party_size_raw field. FAIL if the agent asks the HEADCOUNT GATE question again. FAIL if it routes to COUPLES_THERAPY (10338861) instead. FAIL if booking_for is omitted or set to anything other than 'self'."
     },
     {
       "name": "HG4 -- caller answers 'my partner will be joining too' to the gate -> routes directly to COUPLES_THERAPY with party_size_raw=2, no delivery-mode question",
@@ -41,7 +41,31 @@
         {"role": "assistant", "content": "Just to check -- will this session be just for you, or will someone else, like a partner, be joining you?"},
         {"role": "user", "content": "Yeah, my partner will be joining too."}
       ],
-      "expected_behavior": "PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='confirm_service' with payload appointment_type_id='10338861', appointment_type='Couple Therapy (Working hours)', AND party_size_raw='2' included in the payload -- unconditionally, this field is required on every Couples Therapy confirm_service call, not just when the caller stated a headcount. FAIL if party_size_raw is omitted. FAIL if the agent asks a separate 'in person or online?' question before calling confirm_service -- Couples Therapy covers both delivery modes under one appointment type."
+      "expected_behavior": "PASS if the agent speaks one filler phrase from the TOOL-CALL FILLER set then calls universal_router intent='confirm_service' with payload appointment_type_id='10338861', appointment_type='Couple Therapy (Working hours)', party_size_raw='2', AND booking_for='self' included in the payload -- both unconditionally required on every Couples Therapy confirm_service call, not just when the caller stated a headcount. FAIL if party_size_raw is omitted. FAIL if booking_for is omitted or set to 'other' -- 'my partner will be joining too' describes a second attendee, not a third-party booking. FAIL if the agent asks a separate 'in person or online?' question before calling confirm_service -- Couples Therapy covers both delivery modes under one appointment type."
+    },
+    {
+      "name": "HG9 -- REGRESSION (conv_2801m2ddpwxae26scphrqn5yr0wq): caller says 'my wife is coming' with no name -> booking_for stays self, no name field sent",
+      "tags": ["core", "headcount-gate"],
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to book an appointment please."},
+        {"role": "assistant", "content": "We offer In-Person Therapy at our Kew clinic, or Online Therapy by video or phone -- which would you prefer?"},
+        {"role": "user", "content": "In person please."},
+        {"role": "assistant", "content": "Just to check -- will this session be just for you, or will someone else, like a partner, be joining you?"},
+        {"role": "user", "content": "My wife is coming."}
+      ],
+      "expected_behavior": "This is the exact live call that shipped the bug. PASS if the agent speaks one filler phrase then calls universal_router intent='confirm_service' with payload appointment_type_id='10338861', appointment_type='Couple Therapy (Working hours)', party_size_raw='2', booking_for='self' -- and does NOT include additional_attendee_name_raw (no name was stated) and does NOT include any 'family_member_name' field. FAIL if booking_for is 'other' or omitted -- that is the exact regression: 'my wife is coming' is second-attendee language, not third-party booking language, and must never flip booking_for."
+    },
+    {
+      "name": "HG10 -- caller says 'my wife Sarah is coming' -> partner's name captured via additional_attendee_name_raw",
+      "tags": ["headcount-gate"],
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to book an appointment please."},
+        {"role": "assistant", "content": "We offer In-Person Therapy at our Kew clinic, or Online Therapy by video or phone -- which would you prefer?"},
+        {"role": "user", "content": "In person please."},
+        {"role": "assistant", "content": "Just to check -- will this session be just for you, or will someone else, like a partner, be joining you?"},
+        {"role": "user", "content": "My wife Sarah is coming."}
+      ],
+      "expected_behavior": "PASS if the agent speaks one filler phrase then calls universal_router intent='confirm_service' with payload appointment_type_id='10338861', party_size_raw='2', booking_for='self', AND additional_attendee_name_raw='Sarah'. FAIL if the name is dropped, mangled (e.g. 'my wife Sarah' instead of 'Sarah'), or the agent asks a separate question to collect the name in this node -- Node 6a asks later only if the name wasn't already captured here."
     },
     {
       "name": "HG5 -- caller states category + solo language in the same message ('in person, just me') -> gate is skipped, books immediately",
