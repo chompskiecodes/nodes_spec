@@ -1,5 +1,5 @@
 {
-  "_comment": "Scenario battery for Ryde Health's Node 3 (claude-haiku-4-5, Override: Disabled). Created 2026-09-02 -- same structural fix as intuitive_health_and_wellness (see that clinic's scenarios file): location_id_map switched from '' (fully dynamic) to a static single entry 'Ryde Natural Health'=5, matching node_2_service_resolution.txt's existing LOCATION_RULE ('This clinic has ONE location. NEVER ask the caller about location.'). Confirmed via DB (businesses table): this clinic (clinic_name 'Ryde Natural Health Clinic', clinic_id cb42bc45-753e-4f49-87aa-f39251de8ec4) has exactly ONE business row, and all 24 agent_practitioner_schedules practitioners have rows only there. NOTE: this clinic is currently NOT LIVE (clinics.active=false, no entry in clinic_agent_ids.json) -- this scenario file documents the fix for when the clinic is (re)onboarded; it has not been run against a live/patched agent. See scripts/generate_node3.py CLINIC_CONFIGS['ryde_health'] and .claude/rules/node-edit-verification.md.",
+  "_comment": "Scenario battery for Ryde Health's Node 3 (claude-haiku-4-5, Override: Disabled). Created 2026-09-02 -- same structural fix as intuitive_health_and_wellness (see that clinic's scenarios file): location_id_map switched from '' (fully dynamic) to a static single entry 'Ryde Natural Health'=5, matching node_2_service_resolution.txt's existing LOCATION_RULE ('This clinic has ONE location. NEVER ask the caller about location.'). Confirmed via DB (businesses table): this clinic (clinic_name 'Ryde Natural Health Clinic', clinic_id cb42bc45-753e-4f49-87aa-f39251de8ec4) has exactly ONE business row, and all 24 agent_practitioner_schedules practitioners have rows only there. UPDATE (2026-09-14): the 'NOT LIVE' note above was accurate as of 2026-09-02 but is stale now -- Ryde was unretired 2026-09-09 and has a live entry in clinic_agent_ids.json. See scripts/generate_node3.py CLINIC_CONFIGS['ryde_health'] and .claude/rules/node-edit-verification.md. 2026-09-14: added 3 scenarios (tag due-practitioner-justification) covering the re-added DUE-PRACTITIONER JUSTIFICATION patch -- see the long comment above the 'patches' key in generate_node3.py and nodes/practitioner_due/ryde_health/README.md.",
   "scenarios": [
     {
       "name": "acupuncture-anna-no-location-ask",
@@ -16,6 +16,42 @@
         {"role": "user", "content": "Can I get Physiotherapy booked in, anyone is fine, sometime tomorrow afternoon."}
       ],
       "expected_behavior": "PASS if the agent does NOT ask about location at any point and proceeds toward checking availability for tomorrow afternoon (e.g. 'Checking that now, one moment.' + a tool call). FAIL if the agent asks a location question or defers progress waiting on a location answer."
+    },
+    {
+      "name": "due-practitioner-justification-fires-2plus-times",
+      "tags": ["due-practitioner-justification"],
+      "history": [
+        {"role": "user", "content": "I'd like to book a physio for my lower back pain, I'm a new patient."},
+        {"role": "system", "content": "DYNAMIC VARIABLES: {{caller_complaint}}='lower back pain', {{new_patient_allocation_enabled}}='true', {{patient_status}}='new', {{appointment_type}}='Physiotherapy', {{appointment_type_id}}='9001', {{practitioner_services}}='Sarah Chen=Physiotherapy|Mark Lee=Acupuncture', {{practitioners_with_ids}}='Sarah Chen:5501, Mark Lee:5502'"},
+        {"role": "agent", "text": "When would you like to come in?"},
+        {"role": "user", "content": "Tomorrow morning if possible."},
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent intent=availability, this is the FIRST availability result of the call): {\"practitioners\": [{\"practitioner_name\": \"Sarah Chen\", \"practitioner_id\": \"5501\", \"business_name\": \"Ryde Natural Health\", \"business_id\": \"5\", \"dates\": [{\"date\": \"2026-09-16\", \"slot_groups\": {\"morning\": [\"9:00 AM\", \"9:30 AM\", \"10:00 AM\", \"10:30 AM\"]}, \"slot_offer\": {\"morning\": {\"count\": 4, \"first\": \"9:00 AM\", \"last\": \"10:30 AM\", \"truncated\": true, \"middle\": [\"9:30 AM\", \"10:00 AM\"]}}}], \"bands_available\": [\"morning\"]}], \"multi_day\": false}"}
+      ],
+      "expected_behavior": "confirmed_practitioner was never set by the caller (they never named Sarah) -- Node 3 auto-selected her via PRACTITIONER + LOCATION FALLBACK from the single-practitioner result. All 3 justification conditions hold (caller_complaint set, new_patient_allocation_enabled='true', patient_status='new') and this is the first offer of the call, so the SLOT OFFER 2+ times branch's DUE-PRACTITIONER JUSTIFICATION must fire. PASS if the agent's offer names exactly the two times 9:00 AM and 10:30 AM, names Sarah, names the location on this first offer, AND includes a one-sentence justification tying the recommendation to what the caller said (e.g. 'based on what you've told me, Sarah is a good match for this') in the SAME turn as the time offer -- with zero tool call this turn (it's an offer, not a booking). FAIL if the offer omits the justification sentence entirely, if it names a third time or a second band, or if it makes a tool call this turn."
+    },
+    {
+      "name": "no-justification-when-caller-names-practitioner",
+      "tags": ["due-practitioner-justification"],
+      "history": [
+        {"role": "user", "content": "I'd like to book Sarah Chen for my knee pain, I'm a new patient."},
+        {"role": "system", "content": "DYNAMIC VARIABLES: {{caller_complaint}}='knee pain', {{new_patient_allocation_enabled}}='true', {{patient_status}}='new', {{appointment_type}}='Physiotherapy', {{appointment_type_id}}='9001', {{practitioner_services}}='Sarah Chen=Physiotherapy|Mark Lee=Physiotherapy', {{practitioners_with_ids}}='Sarah Chen:5501, Mark Lee:5502'"},
+        {"role": "agent", "text": "When would you like to come in?"},
+        {"role": "user", "content": "Tomorrow morning if possible."},
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent intent=availability, this is the FIRST availability result of the call): {\"practitioners\": [{\"practitioner_name\": \"Sarah Chen\", \"practitioner_id\": \"5501\", \"business_name\": \"Ryde Natural Health\", \"business_id\": \"5\", \"dates\": [{\"date\": \"2026-09-16\", \"slot_groups\": {\"morning\": [\"9:00 AM\", \"9:30 AM\", \"10:00 AM\", \"10:30 AM\"]}, \"slot_offer\": {\"morning\": {\"count\": 4, \"first\": \"9:00 AM\", \"last\": \"10:30 AM\", \"truncated\": true, \"middle\": [\"9:30 AM\", \"10:00 AM\"]}}}], \"bands_available\": [\"morning\"]}], \"multi_day\": false}"}
+      ],
+      "expected_behavior": "The caller named Sarah Chen themselves in their very first message, so confirmed_practitioner was set by PRACTITIONER PREFERENCE's own name resolution BEFORE this search ran -- PRACTITIONER + LOCATION FALLBACK's own trigger ('confirmed_practitioner was not already set') never applies here even though caller_complaint, new_patient_allocation_enabled, and patient_status all still qualify. PASS if the agent offers 9:00 AM or 10:30 AM with Sarah at the location, on the first offer of the call, with NO justification sentence added. FAIL if the agent adds any justification-style sentence (e.g. 'Sarah is a good match for this', 'based on what you've told me') to this offer -- the caller chose Sarah themselves, so there is nothing to justify."
+    },
+    {
+      "name": "no-justification-for-existing-patient",
+      "tags": ["due-practitioner-justification"],
+      "history": [
+        {"role": "user", "content": "I'd like to book a physio for my shoulder pain."},
+        {"role": "system", "content": "DYNAMIC VARIABLES: {{caller_complaint}}='shoulder pain', {{new_patient_allocation_enabled}}='true', {{patient_status}}='existing', {{appointment_type}}='Physiotherapy', {{appointment_type_id}}='9001', {{practitioner_services}}='Sarah Chen=Physiotherapy|Mark Lee=Acupuncture', {{practitioners_with_ids}}='Sarah Chen:5501, Mark Lee:5502'"},
+        {"role": "agent", "text": "When would you like to come in?"},
+        {"role": "user", "content": "Tomorrow morning if possible."},
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent intent=availability, this is the FIRST availability result of the call): {\"practitioners\": [{\"practitioner_name\": \"Sarah Chen\", \"practitioner_id\": \"5501\", \"business_name\": \"Ryde Natural Health\", \"business_id\": \"5\", \"dates\": [{\"date\": \"2026-09-16\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}, \"slot_offer\": {\"morning\": {\"count\": 1, \"first\": \"9:00 AM\", \"last\": \"9:00 AM\", \"truncated\": false, \"middle\": []}}}], \"bands_available\": [\"morning\"]}], \"multi_day\": false}"}
+      ],
+      "expected_behavior": "confirmed_practitioner was not set by the caller, so PRACTITIONER + LOCATION FALLBACK still auto-selects Sarah from the single-practitioner result and this is the '1 time, no next band' SLOT OFFER branch -- but patient_status='existing', not 'new', so the DUE-PRACTITIONER JUSTIFICATION condition fails. PASS if the agent offers 9:00 AM with Sarah at the location with plain wording ('would that work?') and NO justification sentence. FAIL if any justification-style sentence is added to this offer."
     }
   ]
 }

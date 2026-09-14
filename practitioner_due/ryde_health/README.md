@@ -25,6 +25,70 @@ lost to a later `generate_node3.py` regeneration (no `patches` entry preserves i
 `ryde_health`) — needs re-adding via that generator's `CLINIC_CONFIGS` + a normal Node 3 patch.
 
 
+## Status (2026-09-14) — DUE-PRACTITIONER JUSTIFICATION redesigned and re-added (local only)
+
+Re-added, scoped to `ryde_health` only via a `patches` entry in `scripts/generate_node3.py`
+`CLINIC_CONFIGS['ryde_health']` — not a hand-edit of the generated `.txt` file (which would be
+silently overwritten on the next regeneration, same as any other Node 3 clinic).
+
+No exact original text survived — searched the `nodes` submodule's full git history and found no
+commit containing the old block; it was applied directly to the live/local file circa April 2026
+and later overwritten by a `generate_node3.py` regeneration before ever being committed. The old
+"NEXT AVAILABLE OFFER" / STEP 5 → STEP 9 section it lived in also no longer exists — that
+structure belonged to the pre-2026-07-20 gpt-4.1 "regular" Node 3 template; the clinic has been on
+the P2 slim template (`nodes/node3_templates/node_3_p2_slim.txt`) since that migration. This is a
+fresh design against the current template, not a restoration.
+
+Verified before designing: `{{new_patient_allocation_enabled}}` is a real, currently-live DV —
+set by `tools/twilio_init_webhook.py` from `clinic_settings.new_patient_allocation_mode in
+("even", "custom")`, defaulting to `"false"` — not a stale/unused spec. `{{caller_complaint}}` and
+`{{patient_status}}` are likewise real, live DVs (context-piggybacked via `universal_router`'s
+`CONTEXT_FIELD_SPEC`, pre-declared with empty defaults by `twilio_init_webhook.py`). Also
+confirmed `ryde_health` DOES have a live `clinic_agent_ids.json` entry
+(`agent_4001knngjghcfwna069y6jjd6f2v`) — the "NOT currently live" note that used to sit on this
+clinic's `CLINIC_CONFIGS` entry (accurate 2026-09-02) was stale as of the 2026-09-09 unretirement
+above and has been corrected in both `generate_node3.py` and this clinic's
+`node_3_availability_handler_scenarios.json`.
+
+Design: the current P2 slim template only ever names the recommended practitioner to the caller
+inside `SINGLE-PRACTITIONER`'s two count branches that speak `[first_name]` — "1 time, no next
+band" and "2+ times". Both were patched (tag: `DUE-JUSTIFY` on both) to add one clause ("based on
+what you've told me, [first_name] is a good match for this") to that same spoken turn, gated on
+ALL of: `{{caller_complaint}}` non-empty, `{{new_patient_allocation_enabled}}=="true"`,
+`{{patient_status}}=="new"`, the practitioner having been auto-selected via
+`PRACTITIONER + LOCATION FALLBACK` (i.e. the caller never named one themselves — this is what
+scopes the feature to the due-rank backend recommendation specifically, not a coincidental
+single-practitioner-in-category match or a caller-stated preference), and — for the "2+ times"
+branch — this being the first offer of the call (piggybacking the template's own existing
+LOCATION ANNOUNCEMENT first-offer gate), plus never repeating the sentence for the same
+practitioner later in the same call. Every OUTPUT CONTRACT on the touched branches was extended
+to name the new clause explicitly rather than left to bleed in unconditionally, per
+`.claude/rules/node-prompt-style.md`. `FIRST-APPOINTMENT OVERRIDE` and the "0 times" / "1 time,
+next band has times" branches were deliberately left untouched — none of them speak the
+practitioner's name in this template, so there is nothing to justify there.
+
+Verification: `py -X utf8 scripts/generate_node3.py --clinics ryde_health --dry-run` reports 0
+skipped/warned (both patch anchors matched cleanly); regenerating for real produced a diff
+touching only the two intended lines. Two rounds of the mandatory Haiku self-audit
+(`.claude/rules/node-edit-verification.md`) both ran clean: all 5 scoped scenarios (2 `core` +
+3 new `due-practitioner-justification`-tagged, added to
+`node_3_availability_handler_scenarios.json`) PASSED in both rounds, plus one additional ad-hoc
+probe (re-offering the same due-selected practitioner later in the same call correctly does NOT
+repeat the justification). Confidence scored 74/100 then 70/100 across the two rounds — the drop
+is self-reported-uncertainty noise, not a regression (every scenario output was correct in both
+rounds); the residual stumbling points are multi-turn "already said this, this call" state
+tracking, a difficulty class the base P2 template already carries in several other places
+(LOCATION ANNOUNCEMENT's own first-offer gate, WAITLIST-ASKED CHECK, DETAILS_ACK CALL LOCK) and
+not something newly introduced by this patch — accepted as a known tradeoff rather than iterated
+further.
+
+**Not yet patched to the live agent** — per the standing rule, any `fast_patch.py`/
+`batch_patch.py` run against a live ElevenLabs agent needs explicit user approval every time, even
+though this clinic's onboarding itself was a pre-authorized live-patch exception. Once approved:
+`py -X utf8 scripts/fast_patch.py --clinic "Ryde Health"` (fast_patch regenerates Node 1/2/3/8
+from their generators automatically, so no separate `generate_node3.py` run is needed first).
+
+
 ## Status (2026-09-11) — async_capture_context doc drift investigated, resolved as harmless
 
 Investigated a discrepancy: the live Ryde agent has `details_ack` (`tool_9301kw12gm3jfecbzq20bpf6kzgw`)
