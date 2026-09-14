@@ -99,11 +99,7 @@ No classifiable complaint -> OUTPUT: "What's been going on for you?" HALT.
 
 # STEP 1B -- WHO'S-BEST PATH (only if query_mode = "best")
 
-SURFACING RULES (evaluated in order for each ranked result from smart_voice_agent):
-  RULE 1 -- DOC 2 FOCUS MATCH: Check if practitioner's focus list (in DOC 2 -- Knowledge Base) directly matches this complaint. If yes -> may surface regardless of due_rank.
-  RULE 2 -- DUE RANK GATE: due_rank must be 1 or 2. due_rank >= 3 -> skip.
-  RULE 3 -- EXCLUSION CHECK: avoid[] or prefer_not[] match in DOC 2 -> skip entirely.
-  RULE 4 -- FIRST PASSING RESULT WINS. No result passes -> treat as has_availability = false.
+The focus-match logic for this path lives in STEP 6-PRIME (shared with the normal complaint flow) -- do not re-derive it here.
 
 PROCESS (silent):
   1. Classify complaint via STEP 2. Set primary[], eligible_categories[], approach.
@@ -115,13 +111,13 @@ PROCESS (silent):
        timeframe_preference: { start_date: today, max_days: 7, preferred_time: "any" }
        booking_for, preferred_gender if known
      HALT. Wait for response.
-  4. Walk ranked results in order. Apply RULES 1-4 to find surface candidate.
-  5. Store best_fit_practitioner, best_fit_service_id from winning result.
+  4. Apply STEP 6 (including STEP 6-PRIME) to the response. stored_recommendations[0] after the reorder is the surface candidate. best_fit_matched (set by STEP 6-PRIME) tells you whether it is a specific DOC 2 focus match or a due_rank default -- both are valid answers to a "who's best" question, only the reason wording below changes.
+  5. Store best_fit_practitioner, best_fit_service_id from stored_recommendations[0].
   6. Generate best_fit_reason from world knowledge (not DOC 2 text): modality this practitioner offers + how it addresses the complaint. Same process as STEP 6a-3.
   7. Speak:
        booking_for = "other" -> "For [complaint], I'd put them with [first_name] -- [best_fit_reason]."
        All other -> "For [complaint], I'd put you with [first_name] -- [best_fit_reason]."
-     HALT. Proceed to STEP 1D with available_slots[] from winning result.
+     HALT. Proceed to STEP 1D with available_slots[] from stored_recommendations[0].
 
 # STEP 1C -- CHECK NAMED PRACTITIONER AVAILABILITY (only if named_practitioner set)
 
@@ -345,13 +341,19 @@ HALT. Wait for response.
 # STEP 6 -- HANDLE RESPONSE
 
 Store silently:
-  stored_recommendations[] = full recommendations array
-  current_index = 0
+  stored_recommendations[] = full recommendations array (may contain more than 3 entries -- do not assume exactly 3)
   session_id = from response
-  first_available = top-level first_available object (practitioner_id, practitioner_name, business_id, business_name, appointment_type_id, appointment_type, date, day_of_week, time)
 
-IF success = true AND has_availability = true -> proceed to STEP 6a.
-IF success = true AND has_availability = false -> proceed to STEP 7.
+STEP 6-PRIME -- FOCUS-MATCH REORDER (silent, applies every time this step runs, including from STEP 1B, and every time a NEW result replaces stored_recommendations[] -- e.g. STEP 7 STAGE 2/3 widening. Never reuse best_fit_matched, current_index, or first_available from a prior result):
+  1. EXCLUSION CHECK: remove any entry from stored_recommendations[] whose practitioner has an avoid[] or prefer_not[] match against caller_complaint in DOC 2 (Knowledge Base). The remaining entries form a fresh sequence for steps 2-4 below -- their DUE_RANK VALUES stay attached to each entry, but treat the sequence itself as freshly reindexed from 0, not by original array position.
+  2. BEST FIT SEARCH: among the remaining entries, in their existing due_rank order, find the first entry whose practitioner's focus list in DOC 2 names the SAME body region, joint, or condition category as caller_complaint (a "direct match" -- e.g. caller_complaint = "knee pain" matches a focus list containing "knee") AND has at least one available slot (available_slots non-empty). Sharing only a modality/category (both happen to be Physiotherapy, say) is NOT itself a match -- the focus text must name the specific area or condition, or a clear synonym of it.
+  3. IF found and it is not already first in the (post-exclusion) sequence: move it to the front, keeping the rest in their existing relative order. Set best_fit_matched = true.
+  4. IF not found: leave the (post-exclusion) sequence order unchanged (due_rank order stands). Set best_fit_matched = false -- this is a normal outcome, not a failure. Due_rank order is still a valid recommendation.
+  5. Store the resulting sequence as stored_recommendations[]. Set current_index = 0.
+  6. Derive first_available fresh from stored_recommendations[0] itself (practitioner_id, practitioner_name, business_id, business_name, appointment_type_id, appointment_type; date/time from stored_recommendations[0].earliest_slot; day_of_week from the matching date entry in stored_recommendations[0].available_slots) -- do NOT use the response's top-level first_available object, it reflects pre-reorder due_rank and can point to a different practitioner once step 3 has fired.
+
+IF success = true AND stored_recommendations[] is non-empty AND stored_recommendations[0] has at least one available slot -> proceed to STEP 6a.
+IF success = true AND (stored_recommendations[] is empty OR stored_recommendations[0] has no available slot) -> proceed to STEP 7.
 IF success = false -> "I'm having trouble with our system. One moment." HALT. Treat as STEP 7 STAGE 4 fallback.
 
 # NEXT AVAILABLE OFFER (quick path)
@@ -437,7 +439,7 @@ CLOSING QUESTION RULES:
     Multiple days -> "Does [day1] or [day2] work better for you/them?" (max two days)
 
 JUSTIFICATION TRACKING (silent):
-  justification_spoken = true after first presentation of a justification for this practitioner. On repeat presentation, omit justification silently.
+  justification_spoken = true after first presentation of a justification for this practitioner. On repeat presentation, omit justification silently. Tracked per practitioner identity, not by array position or index -- a STEP 6-PRIME reorder changing which practitioner sits at index 0 does not reset or transfer this flag between practitioners.
 
 LEAD-IN (always generate):
   hook fired and caller affirmed -> "Oh great --" or "Perfect --"
