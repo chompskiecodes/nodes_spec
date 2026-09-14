@@ -185,6 +185,59 @@ def generate_tests() -> List[Dict]:
         ],
     })
 
+    # REG4 — real live-call repro (conv_1001m2etyt7wfnq9sggrd1hac6ec, 2026-09-14): isolate
+    # whether the MISSPELLED reply "phsyio" (not the clean token "physio" REG1 uses) breaks
+    # the PHYSIO_FUNDING_GATE match. Isolated 2-turn history, typo only — nothing else changed
+    # from REG1.
+    tests.append({
+        "name": f"{p} REG4 — MISSPELLED 'phsyio' reply to MENU_LIST asks funding question, not PRIVATE gate",
+        "chat_history": [
+            _m("agent", menu_list, 2),
+            _m("user", "phsyio", 5),
+        ],
+        "success_condition": (
+            f'Agent does NOT ask "{private_gate_q}" (PRIVATE branch gate question) or any other '
+            f'PRIVATE-branch question. A bare misspelled single-word reply "phsyio" (typo for '
+            f'"physio") with no funder or payment method named still matches PHYSIO_FUNDING_GATE, '
+            f'not PRIVATE. Agent asks the funding bucket question: "{funding_q}" (or a close '
+            f'paraphrase covering the same options). Zero tool calls this turn. FAIL if the agent '
+            f'asks the PRIVATE gate question instead.'
+        ),
+        "success_examples": [_ok(funding_q)],
+        "failure_examples": [
+            _fail(private_gate_q),
+            _fail("[calls universal_router]"),
+        ],
+    })
+
+    # REG5 — same real live-call repro, but replaying the FULL real preceding context (greeting,
+    # "book", Node 1's book_intent tool call + transfer to Node 2) ahead of MENU_LIST, exactly as
+    # the real call had it, instead of REG1/REG4's clean 2-turn isolation. Tests whether the extra
+    # context (not just the typo) is what breaks the gate.
+    tests.append({
+        "name": f"{p} REG5 — full real-call context + MISSPELLED 'phsyio' reply asks funding question",
+        "chat_history": [
+            _m("agent", "You've reached Physio Cure AI receptionist! How can I help you?.", 0),
+            _m("user", "book", 1),
+            _m("agent", "Lovely! Let me get you booked in.", 2),
+            _m("agent", menu_list, 3),
+            _m("user", "phsyio", 5),
+        ],
+        "success_condition": (
+            f'Agent does NOT ask "{private_gate_q}" (PRIVATE branch gate question) or any other '
+            f'PRIVATE-branch question. A bare misspelled single-word reply "phsyio" (typo for '
+            f'"physio") with no funder or payment method named still matches PHYSIO_FUNDING_GATE, '
+            f'not PRIVATE. Agent asks the funding bucket question: "{funding_q}" (or a close '
+            f'paraphrase covering the same options). Zero tool calls this turn. FAIL if the agent '
+            f'asks the PRIVATE gate question instead.'
+        ),
+        "success_examples": [_ok(funding_q)],
+        "failure_examples": [
+            _fail(private_gate_q),
+            _fail("[calls universal_router]"),
+        ],
+    })
+
     return tests
 
 
