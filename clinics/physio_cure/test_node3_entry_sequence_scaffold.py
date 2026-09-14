@@ -110,13 +110,66 @@ def _fail(text: str) -> Dict:
     return {"response": text, "type": "failure"}
 
 
-def build_test() -> Dict:
+def _confirm_service_turn(t: int, routing_reminder: Optional[str] = None) -> Dict:
+    """
+    Node 2's real handoff turn — "Just a sec." + universal_router intent="confirm_service"
+    — omitted from the original scaffold (which jumped straight from the caller's "20" to
+    Node 3 generating, with only DVs carrying the resolved state). Modeling this turn for
+    real puts the tool result at actual maximum recency, directly before Node 3 speaks —
+    exactly where a routing hint would need to sit to compete with the duration Q&A's own
+    recency advantage (see docs/in-progress/node3_entry_sequence_gate_haiku_ceiling_2026_09_14.md,
+    "lever 2"). `routing_reminder`, when given, is injected into the tool result content
+    as a real backend fix would produce it — this tests the lever itself, not a wording
+    change to the node prompt.
+    """
+    result: Dict = {
+        "service_resolved": True,
+        "appointment_type_id": APPOINTMENT_TYPE_ID,
+        "appointment_type": APPOINTMENT_TYPE,
+        "practitioner_preference": "",
+        "location_preference": "",
+    }
+    if routing_reminder:
+        result["routing_reminder"] = routing_reminder
+    return {
+        "role": "agent",
+        "message": "Just a sec.",
+        "time_in_call_secs": t,
+        "tool_calls": [{
+            "request_id": "req_confirm_service_1",
+            "tool_name": "universal_router",
+            "params_as_json": json.dumps({
+                "intent": "confirm_service",
+                "appointment_type_id": APPOINTMENT_TYPE_ID,
+                "appointment_type": APPOINTMENT_TYPE,
+            }),
+            "tool_has_been_called": True,
+            "type": "webhook",
+        }],
+        "tool_results": [{
+            "request_id": "req_confirm_service_1",
+            "tool_name": "universal_router",
+            "result_value": json.dumps(result),
+            "is_error": False,
+            "tool_has_been_called": True,
+            "type": "webhook",
+        }],
+    }
+
+
+def build_test(routing_reminder: Optional[str] = None, model_confirm_service_turn: bool = False) -> Dict:
     """
     Exact chat history from the 2026-09-14 live-call transcript that exposed the
     regression: caller opens with "book private funded physio", confirms returning
     patient, picks the 20-minute variant. Node 2 hands off to Node 3 with
     {{appointment_type_id}} resolved, {{timeframe_raw}} empty, no practitioner or
     location ever stated. This is Node 3's very first turn.
+
+    `model_confirm_service_turn=True` inserts Node 2's real "Just a sec." + tool-call turn
+    (see `_confirm_service_turn`) instead of jumping straight from "20" to Node 3's turn.
+    `routing_reminder`, when given, is passed through into that turn's tool result — this
+    is lever 2 from the ceiling tracker doc: inject the hint at max recency via the tool
+    result instead of the node prompt.
     """
     history = [
         _m("agent", "Have you had a physiotherapy consultation with us before?", 2),
@@ -124,8 +177,13 @@ def build_test() -> Dict:
         _m("agent", "Would you like a short 20 minute, standard 30 minute, long 40 minute, or extended 60 minute session?", 8),
         _m("user",  "20", 11),
     ]
+    if model_confirm_service_turn:
+        history.append(_confirm_service_turn(14, routing_reminder))
+    name_suffix = ""
+    if model_confirm_service_turn:
+        name_suffix = " + reminder" if routing_reminder else " + real handoff turn"
     return {
-        "name": f"[{CLINIC}] ENTRY-SEQ — fresh Node 3 entry must not ask timeframe first",
+        "name": f"[{CLINIC}] ENTRY-SEQ — fresh Node 3 entry must not ask timeframe first{name_suffix}",
         "chat_history": history,
         "success_condition": (
             "This is Node 3's very first turn for this call. {{appointment_type_id}} is resolved "
@@ -277,7 +335,7 @@ def dispatch_tests(agent_id: str, test_ids: List[str]) -> Optional[str]:
     return None
 
 
-def poll_invocation(invocation_id: str) -> Optional[Dict]:
+def poll_invocation(invocation_id: str, expected_runs: int = 1) -> Optional[Dict]:
     deadline = time.time() + POLL_TIMEOUT_SECS
     while time.time() < deadline:
         resp = requests.get(f"{BASE_URL}/test-invocations/{invocation_id}", headers=_el_hdrs())
@@ -285,7 +343,7 @@ def poll_invocation(invocation_id: str) -> Optional[Dict]:
             data = resp.json()
             runs = data.get("test_runs", [])
             pending = sum(1 for r in runs if r.get("status") not in ("passed", "failed"))
-            if runs and pending == 0:
+            if runs and pending == 0 and len(runs) >= expected_runs:
                 return data
             print(f"  ... waiting {POLL_INTERVAL_SECS}s ({len(runs) - pending}/{max(len(runs),1)} done)")
         time.sleep(POLL_INTERVAL_SECS)
@@ -293,14 +351,17 @@ def poll_invocation(invocation_id: str) -> Optional[Dict]:
     return None
 
 
-def print_result(result: Dict) -> bool:
+def print_result(result: Dict, label: str = "", test_id: Optional[str] = None) -> bool:
     runs = result.get("test_runs", [])
+    if test_id:
+        runs = [r for r in runs if r.get("test_id") == test_id] or runs
     if not runs:
         print("X No test runs returned.")
         return False
     r = runs[0]
     status = r.get("status")
-    print(f"\n── Result: {status.upper()} ─────────────────────────")
+    header = f"── {label} — Result: {status.upper()} " if label else f"\n── Result: {status.upper()} "
+    print(f"\n{header}{'─' * max(1, 50 - len(header))}")
     agent_responses = r.get("agent_responses") or []
     agent_msg = next(
         (str(x.get("message") or "") for x in agent_responses if x.get("role") == "agent"),
@@ -327,11 +388,35 @@ def print_result(result: Dict) -> bool:
     return status == "passed"
 
 
+ROUTING_REMINDER_TEXT = (
+    "practitioner_preference and location are NOT resolved for this booking. Before asking "
+    "about timeframe, ask which practitioner the caller prefers (or if anyone is fine), then "
+    "which location works for them (or if any location is fine)."
+)
+
+# Stronger-worded variant of the same lever (still injected via tool result, not the node
+# prompt) — MANDATORY framing, explicit negative example, explicit next-action instruction.
+ROUTING_REMINDER_TEXT_STRONG = (
+    "MANDATORY ROUTING NOTE (read before generating your next response): practitioner and "
+    "location are NOT yet resolved for this booking. Your NEXT response MUST ask about "
+    "practitioner preference (naming the practitioners) — do NOT ask about timeframe in this "
+    "response. Do NOT say \"When would you like to come in?\" or any equivalent. The correct "
+    "next response is a practitioner-preference question, nothing else."
+)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Node 3 ENTRY SEQUENCE single-scenario scaffold — physio_cure")
     parser.add_argument("--agent-id", help="Pin to a specific agent ID (bypasses session management)")
     parser.add_argument("--run", action="store_true", help="Run the test after creating/patching the agent")
     parser.add_argument("--cleanup", action="store_true", help="Delete the session agent and exit")
+    parser.add_argument(
+        "--variants", default="baseline",
+        help="Comma-separated: baseline (original, no handoff turn modeled), "
+             "handoff (real Node2 tool-call turn, no reminder), "
+             "reminder (real handoff turn + routing_reminder in tool result). "
+             "e.g. --variants baseline,handoff,reminder",
+    )
     args = parser.parse_args()
 
     if not ELEVENLABS_API_KEY:
@@ -352,7 +437,18 @@ def main() -> None:
     if not node3_prompt:
         sys.exit(1)
 
-    test = build_test()
+    variant_names = [v.strip() for v in args.variants.split(",") if v.strip()]
+    variant_builders = {
+        "baseline": lambda: build_test(),
+        "handoff":  lambda: build_test(model_confirm_service_turn=True),
+        "reminder": lambda: build_test(model_confirm_service_turn=True, routing_reminder=ROUTING_REMINDER_TEXT),
+        "reminder_strong": lambda: build_test(model_confirm_service_turn=True, routing_reminder=ROUTING_REMINDER_TEXT_STRONG),
+    }
+    tests = []
+    for name in variant_names:
+        if name not in variant_builders:
+            print(f"X Unknown variant '{name}' — choices: {list(variant_builders)}"); sys.exit(1)
+        tests.append((name, variant_builders[name]()))
 
     agent_id = args.agent_id
     if agent_id:
@@ -372,24 +468,41 @@ def main() -> None:
                 sys.exit(1)
             _SESSION_FILE.write_text(json.dumps({"agent_id": agent_id}), encoding="utf-8")
 
-    test_id = push_test(test)
-    if not test_id:
-        sys.exit(1)
-    print(f"OK Test pushed: {test_id}")
+    pushed = []
+    for name, t in tests:
+        test_id = push_test(t)
+        if not test_id:
+            sys.exit(1)
+        print(f"OK Test pushed [{name}]: {test_id}")
+        pushed.append((name, test_id))
 
     if args.run:
-        inv_id = dispatch_tests(agent_id, [test_id])
-        passed = False
+        inv_id = dispatch_tests(agent_id, [tid for _, tid in pushed])
+        all_passed = True
         if inv_id:
-            result = poll_invocation(inv_id)
+            result = poll_invocation(inv_id, expected_runs=len(pushed))
             if result:
-                passed = print_result(result)
-        delete_test(test_id)
-        print("PASSED" if passed else "FAILED")
-        sys.exit(0 if passed else 1)
+                runs = result.get("test_runs", [])
+                for name, test_id in pushed:
+                    matching = {"test_runs": [r for r in runs if r.get("test_id") == test_id]}
+                    if not matching["test_runs"]:
+                        # fall back to positional match if API doesn't echo test_id
+                        idx = [tid for _, tid in pushed].index(test_id)
+                        matching = {"test_runs": [runs[idx]]} if idx < len(runs) else {"test_runs": []}
+                    passed = print_result(matching, label=name)
+                    all_passed = all_passed and passed
+            else:
+                all_passed = False
+        else:
+            all_passed = False
+        for _, test_id in pushed:
+            delete_test(test_id)
+        print("\nALL PASSED" if all_passed else "\nSOME FAILED")
+        sys.exit(0 if all_passed else 1)
     else:
-        delete_test(test_id)
-        print("Test validated (not run). Re-run with --run.")
+        for _, test_id in pushed:
+            delete_test(test_id)
+        print("Test(s) validated (not run). Re-run with --run.")
 
 
 if __name__ == "__main__":
