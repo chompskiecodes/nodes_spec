@@ -107,7 +107,7 @@ def generate_tests() -> List[Dict]:
     p = f"[{CLINIC}]"
     menu_list = ("We offer Physiotherapy, Remedial Massage, Group Exercise classes, "
                  "Workplace Assessments, and Telehealth appointments -- which of those were you after?")
-    funding_q = ("How will this be funded -- paying privately, through a Medicare care plan, "
+    funding_q = ("How will this be funded. Paying privately, through a Medicare care plan, "
                  "health insurance, NDIS or DVA, or is this a work injury claim?")
     private_gate_q = "Have you had a physiotherapy consultation with us before?"
 
