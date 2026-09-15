@@ -22,7 +22,7 @@ Every clinic agent uses these same node IDs:
 
 | Node | LLM | Rationale |
 |------|-----|-----------|
-| 1 (entry router) | `gemini-3.1-flash-lite` | Migrated from claude-haiku-4-5; fleet-wide entry router (verified 2026-06-05) |
+| 1 (entry router) | `claude-haiku-4-5` | Migrated fleet-wide from `gemini-2.5-flash` 2026-09-07 (this row was stale — corrected 2026-09-15, see CLAUDE.md's Node LLM map for the authoritative table and `scripts/generate_node1.py`'s `NODE1_TARGET_LLM`) |
 | 2 (service resolution) | `claude-haiku-4-5` | HALT-critical; gpt-4.1-mini fails |
 | 3 (availability) | `gpt-4.1` | All clinics; P1/P2/P3 templates in `node3_templates/`; migrated from haiku 2026-06-04 (audit 92/100 vs haiku 72/100) |
 | 6a/6b (name collect) | `claude-haiku-4-5` | Promoted from `qwen35-397b-a17b` 2026-08-04; retired Qwen originals in `nodes/retired_qwen_node6/`, design + self-audit in `.claude/rules/node6-haiku-slim-design.md` |
