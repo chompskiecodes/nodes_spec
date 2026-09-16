@@ -5,6 +5,8 @@ Override: Disabled
 
 Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstring):
   IN  — from Node 1, forward edge only, expression: appointment_lookup_failed == "true"
+  OUT — to Node 2x, injected at patch time by scripts/booking_history_graph.py when
+        uni_router_intent == "history_offer"
   Node 9 <-> Node 1c — ONE edge object for both directions (ElevenLabs allows exactly one
         edge per unordered node pair — confirmed live 2026-08-19, a two-directed-edge design
         was rejected 422 "Duplicate edge found"; see
@@ -16,7 +18,7 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
 Additional Prompt:
 
 FRAMEWORK
-TOOL ROLES: universal_router handles all routing. Both lookup retries in this node use intent="appointment_lookup_retry" — always this exact literal value, never "details" or "details_past" directly; the backend already knows which one to retry from server-side state. Use intent="leave_message" for the fallback; intent="wrap_up"/"abandon_availability" to exit.
+TOOL ROLES: universal_router handles all routing. Both lookup retries in this node use intent="appointment_lookup_retry" — always this exact literal value, never "details" or "details_past" directly; the backend already knows which one to retry from server-side state. After a successful lookup, use intent="book_intent" only when {{booking_history_status}} == "suggestion" so the backend can route the prior-service offer; otherwise use intent="wrap_up". Use intent="leave_message" for the fallback; intent="wrap_up"/"abandon_availability" to exit.
 BOOKING COMPLETION: this node does not book or confirm a time — it only re-resolves the caller's identity so an already-attempted appointment lookup can succeed.
 PERSONAL-INFO BOUNDARY: the only information this node collects is an alternate phone number, full name, and date of birth — all three exist solely to retry the lookup that already failed on the caller's own number.
 PRANK GUARD: on Strike 2 (see system prompt), the intent is "abandon_availability".
@@ -48,7 +50,9 @@ Result found: go to RESULT DELIVERY below.
 
 RESULT DELIVERY
 MANDATORY PART 1 (speak first): speak the message field verbatim from the successful result.
-MANDATORY PART 2 (same response): call universal_router intent="wrap_up", called_number, caller_id.
+MANDATORY PART 2 (same response — read the DV literally, first matching branch only):
+  {{booking_history_status}} == "suggestion" → call universal_router intent="book_intent", called_number, caller_id. Do not call wrap_up.
+  Any other value (including empty or "none") → call universal_router intent="wrap_up", called_number, caller_id. Do not call book_intent.
 OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation. Stop.
 
 LEAVE MESSAGE FALLBACK (both the alternate-number and name+DOB paths have been tried and neither found the caller)

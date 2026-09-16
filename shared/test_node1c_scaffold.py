@@ -21,7 +21,7 @@ resolves which underlying lookup to retry from server-side session state. T2/T4/
 updated to expect this literal value — same shape as T6's intent="wrap_up", which passed
 reliably in every prior run specifically because it's already a fixed literal, not a DV.
 
-Covers (6 tests, cost-conscious per this repo's convention — not full coverage):
+Covers (7 tests, cost-conscious per this repo's convention — not full coverage):
   T1 ENTRY               — MANDATORY PART 1 exact message, no tool call, stops.
   T2 ALT_NUM_VALID        — valid alt number -> filler + universal_router
                              intent="appointment_lookup_retry" (fixed literal — see STATUS
@@ -43,6 +43,9 @@ Covers (6 tests, cost-conscious per this repo's convention — not full coverage
                              MANDATORY PART 2 calls universal_router intent="wrap_up" in the SAME
                              turn (OUTPUT CONTRACT — producing either without the other is a
                              protocol violation, per the node's own text).
+  T7 HISTORY_OFFER        — the same successful result carries
+                             booking_history_status="suggestion" -> speaks the message verbatim
+                             and calls book_intent instead of wrap_up in the same turn.
 
 NOT covered (out of scope for this pass, flag before expanding):
   - LEAVE MESSAGE FALLBACK's decline branch — the node's own wording ("say X then call Y in
@@ -458,6 +461,37 @@ def generate_tests() -> List[Dict]:
         ],
     })
 
+    # ── T7 — HISTORY_OFFER: speak result + call book_intent, same turn ─────────
+    fixture_history_result = {
+        "success": True,
+        "message": "Great news — I found your appointment. You're booked for Tuesday at 3 PM with Dr. Chen.",
+        "booking_history_status": "suggestion",
+        "booking_history_prompt": "Last time you had an initial assessment. Would you like to book that again?",
+    }
+    tests.append({
+        "name": "[node1c] T7 HISTORY_OFFER — speak lookup result AND call book_intent, same turn",
+        "chat_history": [
+            _m("agent", ENTRY_MSG, 2),
+            _m("user", "Try 0412 345 678.", 6),
+            _m("agent", f"[universal_router response received]: {json.dumps(fixture_history_result)}", 9),
+        ],
+        "success_condition": (
+            "The successful universal_router retry returned booking_history_status=suggestion. "
+            "PASS: in the SAME turn, the agent (1) speaks the message field verbatim and "
+            '(2) calls universal_router with intent="book_intent", called_number, and caller_id. '
+            "It does NOT call wrap_up and does NOT speak booking_history_prompt itself; Node 2x "
+            "speaks that prompt after the history_offer edge fires."
+        ),
+        "success_examples": [
+            _ok("Great news — I found your appointment. You're booked for Tuesday at 3 PM with Dr. Chen. [calls universal_router intent=book_intent]"),
+        ],
+        "failure_examples": [
+            _fail("Great news — I found your appointment. You're booked for Tuesday at 3 PM with Dr. Chen. [calls universal_router intent=wrap_up]"),
+            _fail("Last time you had an initial assessment. Would you like to book that again?"),
+            _fail("[calls universal_router intent=book_intent]"),
+        ],
+    })
+
     return tests
 
 
@@ -670,7 +704,7 @@ def clear_session_agent() -> None:
 def main() -> None:
     global _SESSION_FILE, _PASSED_FILE
 
-    parser = argparse.ArgumentParser(description="Node 1c (appointment lookup recovery) scaffold test — 6 tests, not full coverage")
+    parser = argparse.ArgumentParser(description="Node 1c (appointment lookup recovery) scaffold test — 7 tests, not full coverage")
     parser.add_argument("--run", action="store_true", help="Execute the tests after pushing")
     parser.add_argument("--agent-id", help="Reuse a specific EL scaffold agent ID (bypasses session management, never auto-deleted)")
     parser.add_argument("--cleanup", action="store_true", help="Delete the session agent and exit")
