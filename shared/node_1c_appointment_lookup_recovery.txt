@@ -3,52 +3,12 @@ Label: 1c. Appointment Lookup Recovery
 LLM: claude-haiku-4-5
 Override: Disabled
 
-Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstring):
-  IN  — from Node 1, forward edge only, expression: appointment_lookup_failed == "true"
-  OUT — to Node 2x, injected at patch time by scripts/booking_history_graph.py when
-        uni_router_intent == "history_offer"
-  Node 2 <-> Node 1c — ONE edge object for both directions, injected at patch time by
-        scripts/appointment_lookup_recovery_graph.py (closes the gap where Node 2's own
-        global self-lookup, per system_prompt.txt's PATIENT APPOINTMENT LOOKUP, had no
-        route to this node on failure — confirmed live 2026-09-17 at Physio Cure):
-    forward_condition  (2 -> 1c): appointment_lookup_failed == "true"
-    backward_condition (1c -> 2): uni_router_intent == "book_intent" — fires for two distinct
-        cases (ElevenLabs edges match on DV value alone, not on which branch produced it):
-        the {{booking_history_status}} == "suggestion" path (an unrelated booking-history
-        recovery flow, see booking_history_graph.py), and REBOOK GATE DECISION's decline
-        branch below (a caller reached via {{return_node}} == "2" or "1" who was offered
-        their resolved service again and said no — handed to Node 2's own service catalog
-        instead of assuming the declined service, regardless of whether the caller originally
-        came from Node 2's self-lookup or a node's own repeat-visit offer, e.g. physio_cure's
-        Node 1 RETURNING PATIENT LOOKUP OFFER — Node 2's service menu is a valid landing spot
-        either way). A caller who ACCEPTS the REBOOK GATE offer does NOT use this edge — that
-        goes straight to Node 3 via the edge below, never back through Node 2 (see that
-        edge's own comment for why).
-  Node 1c -> Node 3 — forward only, injected at patch time by
-        scripts/appointment_lookup_recovery_graph.py (closes a SECOND gap found live at
-        Physio Cure the same day, right after the edge above shipped: handing a resolved
-        booking-motivated caller BACK to Node 2 just relocated the stall — Node 2 is the
-        service-resolution node, not the availability node, and had no instruction for "the
-        exact service and practitioner are already known, skip straight to checking times",
-        so it improvised an out-of-contract confirm_time call and silently stalled a full
-        turn waiting on the caller. node_1c's own lookup already resolves the exact
-        appointment_type_id and last-seen practitioner from history, so RESULT DELIVERY below
-        calls confirm_service when {{return_node}} == "2" or "1" AND the caller accepted the
-        REBOOK GATE offer (added after a live Physio Cure repro showed the caller needs a chance to
-        decline the offered service, not just be silently re-booked into it) — the same
-        intent Node 2's own passthrough template uses, which routes to Node 3 via
-        uni_router_intent == "service_resolved" (see scripts/validate_new_agent.py's
-        REQUIRED_PATHS: "Node 2 -> Node 3 (service_resolved)", and
-        scripts/patch_agent_edges.py's intent->DV MAP, for confirmation this is the live
-        condition on Node 2's own edge into Node 3):
-    forward_condition (1c -> 3): uni_router_intent == "service_resolved"
-  Node 9 <-> Node 1c — ONE edge object for both directions (ElevenLabs allows exactly one
-        edge per unordered node pair — confirmed live 2026-08-19, a two-directed-edge design
-        was rejected 422 "Duplicate edge found"; see
-        .claude/rules/plantar_fascia_one_edge_per_node_pair_bug.md for the ordered-pair
-        sibling of this constraint):
-    forward_condition  (9 -> 1c): appointment_lookup_failed == "true"
-    backward_condition (1c -> 9): uni_router_intent == "wrap_up" OR uni_router_intent == "abandon_availability"
+Edges (injected at patch time by scripts/appointment_lookup_recovery_graph.py and scripts/booking_history_graph.py):
+  Node 1  -> Node 1c: appointment_lookup_failed == "true"
+  Node 1c -> Node 2x: uni_router_intent == "history_offer"
+  Node 2  <> Node 1c: forward appointment_lookup_failed == "true" | backward uni_router_intent == "book_intent"
+  Node 1c -> Node 3:  uni_router_intent == "service_resolved"
+  Node 9  <> Node 1c: forward appointment_lookup_failed == "true" | backward uni_router_intent == "wrap_up" OR uni_router_intent == "abandon_availability"
 
 Additional Prompt:
 
