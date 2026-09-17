@@ -12,11 +12,15 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
         global self-lookup, per system_prompt.txt's PATIENT APPOINTMENT LOOKUP, had no
         route to this node on failure — confirmed live 2026-09-17 at Physio Cure):
     forward_condition  (2 -> 1c): appointment_lookup_failed == "true"
-    backward_condition (1c -> 2): uni_router_intent == "book_intent" — fires ONLY for the
-        {{booking_history_status}} == "suggestion" path (an unrelated booking-history
-        recovery flow, see booking_history_graph.py). A caller returning here via
-        {{return_node}} == "2" does NOT use this edge — it goes straight to Node 3 via the
-        edge below, never back through Node 2 (see that edge's own comment for why).
+    backward_condition (1c -> 2): uni_router_intent == "book_intent" — fires for two distinct
+        cases (ElevenLabs edges match on DV value alone, not on which branch produced it):
+        the {{booking_history_status}} == "suggestion" path (an unrelated booking-history
+        recovery flow, see booking_history_graph.py), and REBOOK GATE DECISION's decline
+        branch below (a caller reached via {{return_node}} == "2" who was offered their
+        resolved service again and said no — handed to Node 2's own service catalog instead
+        of assuming the declined service). A caller who ACCEPTS the REBOOK GATE offer does
+        NOT use this edge — that goes straight to Node 3 via the edge below, never back
+        through Node 2 (see that edge's own comment for why).
   Node 1c -> Node 3 — forward only, injected at patch time by
         scripts/appointment_lookup_recovery_graph.py (closes a SECOND gap found live at
         Physio Cure the same day, right after the edge above shipped: handing a resolved
@@ -26,8 +30,10 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
         so it improvised an out-of-contract confirm_time call and silently stalled a full
         turn waiting on the caller. node_1c's own lookup already resolves the exact
         appointment_type_id and last-seen practitioner from history, so RESULT DELIVERY below
-        now calls confirm_service directly when {{return_node}} == "2" — the same intent
-        Node 2's own passthrough template uses, which routes to Node 3 via
+        calls confirm_service when {{return_node}} == "2" AND the caller accepted the REBOOK
+        GATE offer (added after a live Physio Cure repro showed the caller needs a chance to
+        decline the offered service, not just be silently re-booked into it) — the same
+        intent Node 2's own passthrough template uses, which routes to Node 3 via
         uni_router_intent == "service_resolved" (see scripts/validate_new_agent.py's
         REQUIRED_PATHS: "Node 2 -> Node 3 (service_resolved)", and
         scripts/patch_agent_edges.py's intent->DV MAP, for confirmation this is the live
@@ -45,6 +51,7 @@ Additional Prompt:
 
 FRAMEWORK
 TOOL ROLES: universal_router handles all routing. Both lookup retries in this node use intent="appointment_lookup_retry" — always this exact literal value, never "details" or "details_past" directly; the backend already knows which one to retry from server-side state. After a successful lookup, use intent="book_intent" only when {{booking_history_status}} == "suggestion" so the backend can route the prior-service offer; otherwise use intent="wrap_up". Use intent="leave_message" for the fallback; intent="wrap_up"/"abandon_availability" to exit.
+RESULT OWNERSHIP: RESULT DELIVERY below is this node's own details_ack — its three branches (book_intent / REBOOK GATE / wrap_up) are what closes out every appointment_lookup_retry result reached in this node. The shared system prompt's separate details_ack tool belongs only to nodes checking an appointment directly outside this flow; call one of RESULT DELIVERY's own three branches here, every time, instead.
 BOOKING COMPLETION: this node does not book or confirm a time — it only re-resolves the caller's identity so an already-attempted appointment lookup can succeed.
 PERSONAL-INFO BOUNDARY: the only information this node collects is an alternate phone number, full name, and date of birth — all three exist solely to retry the lookup that already failed on the caller's own number.
 PRANK GUARD: on Strike 2 (see system prompt), the intent is "abandon_availability".
@@ -53,8 +60,9 @@ ROUTING CONSTANTS (include in every universal_router call): called_number: {{sys
 RETRY INTENT: every lookup retry tool call in this node uses intent="appointment_lookup_retry" — a fixed value, never varying. Do not write "details" or "details_past" as the intent for a retry call; the backend resolves which lookup to retry on its own.
 
 ENTRY
-When this node opens, a phone-based appointment lookup on the caller's own number has already failed — the caller has not been told this yet; nothing about the failed lookup has been spoken.
-MANDATORY PART 1 (output first, no exceptions): speak "Our system finds appointments by the number you're calling from, and I wasn't able to match it. Is the appointment maybe under a different number?"
+When this node opens, a phone-based appointment lookup has already failed — the caller has not been told this yet; nothing about the failed lookup has been spoken.
+THIRD-PARTY ENTRY ({{booking_for}} == "other" — this call is for someone other than the caller, e.g. a family member or another named person): the failed lookup was never going to match the caller's own number to begin with, so the "different number" framing below does not apply. MANDATORY PART 1 (output first, no exceptions): speak "I wasn't able to find their details using this number. What's the best phone number for them, or can I get their full name and date of birth instead?" Stop — wait for the caller's response. Whatever the caller gives next routes directly: a phone number goes to ALTERNATE NUMBER PATH step 2 (validation) below; a full name and date of birth goes to NAME+DOB PATH below.
+SELF ENTRY (any other value of {{booking_for}}): MANDATORY PART 1 (output first, no exceptions): speak "Our system finds appointments by the number you're calling from, and I wasn't able to match it. Is the appointment maybe under a different number?"
 Stop — wait for the caller's response.
 
 ALTERNATE NUMBER PATH (caller says yes / gives a number)
@@ -77,10 +85,15 @@ Result found: go to RESULT DELIVERY below.
 RESULT DELIVERY
 MANDATORY PART 1 (speak first): speak the message field verbatim from the successful result.
 MANDATORY PART 2 (same response — evaluate these branches top to bottom, first match only; {{booking_history_status}} == "suggestion" is checked BEFORE {{return_node}} even when both happen to be set at once — a "suggestion" always wins):
-  {{booking_history_status}} == "suggestion" → call universal_router intent="book_intent", called_number, caller_id. Do not call wrap_up or confirm_service.
-  {{return_node}} == "2" → call universal_router intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "<appointment_type_id from this lookup's successful result>", "appointment_type": "<appointment_type from this lookup's successful result>", "practitioner_preference": "<the practitioner name this lookup's successful result returned (e.g. its next_appointment_practitioner_name field), only if one was returned — omit the key entirely if none was>"}. Never include practitioner_id in this payload — Node 3 resolves the actual practitioner from availability results, exactly like every other confirm_service call in this system. ({{return_node}} == "2" means the caller reached this node mid-booking, from Node 2 — resolving their identity is not the end of the call. Node 2 is the service-resolution node, not the availability node — this lookup already resolved the exact service and practitioner, so hand the caller straight to the availability node instead of back through Node 2.) Do not call book_intent or wrap_up.
-  Any other value (including empty or "none") → call universal_router intent="wrap_up", called_number, caller_id. Do not call book_intent or confirm_service.
-OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation. Stop.
+  {{booking_history_status}} == "suggestion" → call universal_router intent="book_intent", called_number, caller_id. Do not call wrap_up or confirm_service. OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation.
+  {{return_node}} == "2" → REBOOK GATE [NO TOOL CALL THIS TURN — the only branch of the three that doesn't call universal_router; the branches above and below both do]: this turn's entire spoken output is PART 1's message immediately followed by "Would you like to book another one?" Zero tool calls this turn — HALT and wait for the caller's reply. ({{return_node}} == "2" means the caller reached this node mid-booking, from Node 2 — resolving their identity is not the end of the call, and this lookup already resolved an exact service the caller has history with, so confirm they still want it before routing to availability.) Evaluate REBOOK GATE DECISION below on the caller's very next reply — do not re-evaluate this branch or repeat the message.
+  Any other value (including empty or "none") → call universal_router intent="wrap_up", called_number, caller_id. Do not call book_intent or confirm_service. OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation.
+Stop after whichever branch fires.
+
+REBOOK GATE DECISION (evaluate only on the turn immediately after REBOOK GATE asked "Would you like to book another one?"):
+  Clear acceptance ("yes", "please", "that works", "book it", "sure", "yeah") → OUTPUT CONTRACT: this response MUST contain (1) one filler phrase from the TOOL-CALL FILLER set AND (2) call universal_router intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "<appointment_type_id from the successful lookup result earlier in this conversation>", "appointment_type": "<appointment_type from that same result>", "practitioner_preference": "<the practitioner name that result returned — its next_appointment_practitioner_name field for a details lookup, or its practitioner_preference field for a details_past lookup, whichever one it actually set — only if one was returned; omit the key entirely if none was>"}. Never include practitioner_id in this payload — Node 3 resolves the actual practitioner from availability results, exactly like every other confirm_service call in this system. Producing either without the other is a protocol violation. HALT.
+  Clear decline ("no", "not that one", "something else", "different") → OUTPUT CONTRACT: this response MUST contain (1) one filler phrase from the TOOL-CALL FILLER set AND (2) call universal_router intent="book_intent", called_number, caller_id. Producing either without the other is a protocol violation. (Node 2's own service catalog takes over from here — the caller declined the resolved service, so hand back to normal service resolution rather than assume it.) HALT.
+  Unclear answer → repeat "Would you like to book another one?" verbatim, zero tool calls. HALT.
 
 LEAVE MESSAGE FALLBACK (both the alternate-number and name+DOB paths have been tried and neither found the caller)
 Say "I still wasn't able to find your details, but I can pass a message on to the clinic so they can help you directly. Would that be okay?"

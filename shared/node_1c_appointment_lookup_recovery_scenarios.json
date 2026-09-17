@@ -8,28 +8,61 @@
         {"role": "assistant", "content": "One moment."},
         {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"I found your appointment for Tuesday at 10am.\", \"booking_history_status\": \"suggestion\", \"booking_history_prompt\": \"Last time you had an initial assessment. Would you like to book that again?\"}"}
       ],
-      "expected_behavior": "PASS if the agent speaks 'I found your appointment for Tuesday at 10am.' verbatim and, in the same response, calls universal_router intent='book_intent' with called_number and caller_id. It must not call wrap_up and must not speak the booking-history prompt itself."
+      "expected_behavior": "PASS if the agent speaks 'I found your appointment for Tuesday at 10am.' verbatim and, in the same response, calls universal_router intent='book_intent' with called_number and caller_id. It must not call wrap_up, must not call confirm_service, and must not call the details_ack tool."
     },
     {
       "name": "Successful lookup without a suggestion keeps ordinary wrap-up routing",
-      "tags": ["history-offer"],
+      "tags": ["core", "history-offer"],
       "history": [
         {"role": "assistant", "content": "One moment."},
-        {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"I found your appointment for Tuesday at 10am.\", \"booking_history_status\": \"\"}"}
+        {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"I found your appointment for Tuesday at 10am.\", \"booking_history_status\": \"\", \"return_node\": \"\"}"}
       ],
-      "expected_behavior": "PASS if the agent speaks 'I found your appointment for Tuesday at 10am.' verbatim and, in the same response, calls universal_router intent='wrap_up' with called_number and caller_id. It must not call book_intent."
+      "expected_behavior": "PASS if the agent speaks 'I found your appointment for Tuesday at 10am.' verbatim and, in the same response, calls universal_router intent='wrap_up' with called_number and caller_id. It must not call book_intent or confirm_service. FAIL if it calls the details_ack tool instead of (or in addition to) universal_router — this node owns its own result delivery and never uses details_ack, regardless of what the shared system prompt's PATIENT APPOINTMENT LOOKUP section says about that tool for other nodes."
     },
     {
-      "name": "Booking-motivated caller returning to Node 2 routes straight to confirm_service (Node 3), not book_intent",
-      "tags": ["core", "return-node-2"],
+      "name": "return_node==2 offers a rebook gate instead of silently confirming the service",
+      "tags": ["core", "return-node-2", "rebook-gate"],
       "history": [
         {"role": "user", "content": "Hi, can I please book my next appointment for Kevin Rolfs?"},
-        {"role": "assistant", "content": "Our system finds appointments by the number you're calling from, and I wasn't able to match it. Is the appointment maybe under a different number?"},
+        {"role": "assistant", "content": "I wasn't able to find their details using this number. What's the best phone number for them, or can I get their full name and date of birth instead?"},
         {"role": "user", "content": "95314533"},
         {"role": "assistant", "content": "One moment."},
         {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"Your last appointment was TAC Standard Consultation with Pawankumar.\", \"return_node\": \"2\", \"booking_history_status\": \"\", \"appointment_type_id\": \"1875983890061984884\", \"appointment_type\": \"TAC Standard Consultation\", \"next_appointment_practitioner_id\": \"1998279099461666084\", \"next_appointment_practitioner_name\": \"Pawankumar\"}"}
       ],
-      "expected_behavior": "PASS only if the agent speaks 'Your last appointment was TAC Standard Consultation with Pawankumar.' verbatim AND, in the same response, calls universal_router intent='confirm_service' (never book_intent, never wrap_up) with called_number, caller_id, and a payload containing appointment_type_id='1875983890061984884', appointment_type='TAC Standard Consultation', and practitioner_preference='Pawankumar'. FAIL if the payload includes a practitioner_id key at all — Node 3 must resolve the practitioner from availability results, not receive one directly from this node. This is the exact reproduced Physio Cure call (2026-09-17): the caller said 'book my next appointment', so Node 2's own self-lookup failed and routed here; on success the caller must be handed to the availability node (Node 3), not back to Node 2, which has no instruction for an already-fully-resolved booking and previously improvised an out-of-contract confirm_time call that silently stalled the call."
+      "expected_behavior": "PASS only if the agent's entire spoken output is 'Your last appointment was TAC Standard Consultation with Pawankumar.' immediately followed by 'Would you like to book another one?', with ZERO tool calls this turn. FAIL if it calls confirm_service, book_intent, wrap_up, or details_ack on this turn — this is the exact reproduced Physio Cure call (2026-09-17), and the caller must be asked before being routed anywhere, not silently re-booked or silently dropped into ordinary wrap-up."
+    },
+    {
+      "name": "REBOOK GATE decision — acceptance routes to confirm_service with the resolved service",
+      "tags": ["core", "return-node-2", "rebook-gate"],
+      "history": [
+        {"role": "assistant", "content": "One moment."},
+        {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"Your last appointment was TAC Standard Consultation with Pawankumar.\", \"return_node\": \"2\", \"booking_history_status\": \"\", \"appointment_type_id\": \"1875983890061984884\", \"appointment_type\": \"TAC Standard Consultation\", \"next_appointment_practitioner_id\": \"1998279099461666084\", \"next_appointment_practitioner_name\": \"Pawankumar\"}"},
+        {"role": "assistant", "content": "Your last appointment was TAC Standard Consultation with Pawankumar. Would you like to book another one?"},
+        {"role": "user", "content": "Yes please"}
+      ],
+      "expected_behavior": "PASS only if the agent speaks one filler phrase (e.g. 'One moment.') AND, in the same response, calls universal_router intent='confirm_service' with a payload containing appointment_type_id='1875983890061984884', appointment_type='TAC Standard Consultation', and practitioner_preference='Pawankumar'. FAIL if the payload includes a practitioner_id key at all, or if it calls book_intent or wrap_up instead."
+    },
+    {
+      "name": "REBOOK GATE decision — decline routes back to Node 2 via book_intent",
+      "tags": ["core", "return-node-2", "rebook-gate"],
+      "history": [
+        {"role": "assistant", "content": "One moment."},
+        {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"Your last appointment was TAC Standard Consultation with Pawankumar.\", \"return_node\": \"2\", \"booking_history_status\": \"\", \"appointment_type_id\": \"1875983890061984884\", \"appointment_type\": \"TAC Standard Consultation\"}"},
+        {"role": "assistant", "content": "Your last appointment was TAC Standard Consultation with Pawankumar. Would you like to book another one?"},
+        {"role": "user", "content": "No, something different actually"}
+      ],
+      "expected_behavior": "PASS only if the agent speaks one filler phrase AND, in the same response, calls universal_router intent='book_intent' with called_number and caller_id. FAIL if it calls confirm_service (that would silently book the declined service) or wrap_up (that would drop the caller instead of handing them to Node 2's own service menu)."
+    },
+    {
+      "name": "return_node==2 with no practitioner on file omits practitioner_preference entirely on acceptance",
+      "tags": ["return-node-2", "rebook-gate"],
+      "history": [
+        {"role": "assistant", "content": "One moment."},
+        {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"Your last appointment was General Physiotherapy.\", \"return_node\": \"2\", \"booking_history_status\": \"\", \"appointment_type_id\": \"555\", \"appointment_type\": \"General Physiotherapy\", \"next_appointment_practitioner_id\": \"\", \"next_appointment_practitioner_name\": \"\"}"},
+        {"role": "assistant", "content": "Your last appointment was General Physiotherapy. Would you like to book another one?"},
+        {"role": "user", "content": "Sure, that works"}
+      ],
+      "expected_behavior": "PASS if the agent calls universal_router intent='confirm_service' with payload appointment_type_id='555', appointment_type='General Physiotherapy', and NO practitioner_preference key (empty/absent, never a placeholder like 'none' or 'unknown'). FAIL if practitioner_id is included, or if a placeholder practitioner_preference value is invented."
     },
     {
       "name": "Booking-history suggestion still wins over return_node==2 when both are set",
@@ -38,23 +71,23 @@
         {"role": "assistant", "content": "One moment."},
         {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"I found your appointment for Tuesday at 10am.\", \"return_node\": \"2\", \"booking_history_status\": \"suggestion\", \"booking_history_prompt\": \"Last time you had an initial assessment. Would you like to book that again?\", \"appointment_type_id\": \"999\", \"appointment_type\": \"Initial Assessment\"}"}
       ],
-      "expected_behavior": "PASS if the agent speaks 'I found your appointment for Tuesday at 10am.' verbatim and calls universal_router intent='book_intent' (the booking_history_status=='suggestion' branch is evaluated first and wins). FAIL if it calls confirm_service instead — the two branches must never both fire, and 'suggestion' takes priority per the first-matching-branch rule."
+      "expected_behavior": "PASS if the agent speaks 'I found your appointment for Tuesday at 10am.' verbatim and calls universal_router intent='book_intent' (the booking_history_status=='suggestion' branch is evaluated first and wins). FAIL if it asks the REBOOK GATE question or calls confirm_service instead — the two branches must never both fire, and 'suggestion' takes priority per the first-matching-branch rule."
     },
     {
-      "name": "return_node==2 with no practitioner on file omits practitioner_preference entirely",
-      "tags": ["return-node-2"],
+      "name": "Third-party entry asks for the named person's own details, not a different number",
+      "tags": ["core", "third-party-entry"],
       "history": [
-        {"role": "user", "content": "I'd like to book my next physio session."},
-        {"role": "assistant", "content": "Our system finds appointments by the number you're calling from, and I wasn't able to match it. Is the appointment maybe under a different number?"},
-        {"role": "user", "content": "No, that's the right number."},
-        {"role": "assistant", "content": "No worries — can I get your full name?"},
-        {"role": "user", "content": "Jamie Chen"},
-        {"role": "assistant", "content": "And your date of birth?"},
-        {"role": "user", "content": "3rd of June 1990"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "tool", "content": "[universal_router response]: {\"found\": true, \"message\": \"Your last appointment was General Physiotherapy.\", \"return_node\": \"2\", \"booking_history_status\": \"\", \"appointment_type_id\": \"555\", \"appointment_type\": \"General Physiotherapy\", \"next_appointment_practitioner_id\": \"\", \"next_appointment_practitioner_name\": \"\"}"}
+        {"role": "user", "content": "Hi, can I please book next appointment for Kevin Rolfs?"}
       ],
-      "expected_behavior": "PASS if the agent speaks 'Your last appointment was General Physiotherapy.' verbatim and calls universal_router intent='confirm_service' with payload appointment_type_id='555', appointment_type='General Physiotherapy', and NO practitioner_preference key (empty/absent, never a placeholder like 'none' or 'unknown'). FAIL if practitioner_id is included, or if a placeholder practitioner_preference value is invented."
+      "expected_behavior": "PASS only if, with {{booking_for}} == \"other\" set on entry to this node, the agent's entire spoken output is 'I wasn't able to find their details using this number. What's the best phone number for them, or can I get their full name and date of birth instead?' with zero tool calls. FAIL if it asks 'Is the appointment maybe under a different number?' (that question implies looking up the CALLER's own account, not Kevin's) or 'Have you booked with us before?' (that framing was the exact live Physio Cure failure, 2026-09-17)."
+    },
+    {
+      "name": "Self entry keeps the original alternate-number question",
+      "tags": ["core", "third-party-entry"],
+      "history": [
+        {"role": "user", "content": "Can you check my appointment?"}
+      ],
+      "expected_behavior": "PASS only if, with {{booking_for}} empty/unset (a self lookup, not third-party), the agent's entire spoken output is 'Our system finds appointments by the number you're calling from, and I wasn't able to match it. Is the appointment maybe under a different number?' with zero tool calls. This is a regression guard — the third-party entry branch must not change self-caller behavior."
     }
   ]
 }
