@@ -16,11 +16,14 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
         cases (ElevenLabs edges match on DV value alone, not on which branch produced it):
         the {{booking_history_status}} == "suggestion" path (an unrelated booking-history
         recovery flow, see booking_history_graph.py), and REBOOK GATE DECISION's decline
-        branch below (a caller reached via {{return_node}} == "2" who was offered their
-        resolved service again and said no — handed to Node 2's own service catalog instead
-        of assuming the declined service). A caller who ACCEPTS the REBOOK GATE offer does
-        NOT use this edge — that goes straight to Node 3 via the edge below, never back
-        through Node 2 (see that edge's own comment for why).
+        branch below (a caller reached via {{return_node}} == "2" or "1" who was offered
+        their resolved service again and said no — handed to Node 2's own service catalog
+        instead of assuming the declined service, regardless of whether the caller originally
+        came from Node 2's self-lookup or a node's own repeat-visit offer, e.g. physio_cure's
+        Node 1 RETURNING PATIENT LOOKUP OFFER — Node 2's service menu is a valid landing spot
+        either way). A caller who ACCEPTS the REBOOK GATE offer does NOT use this edge — that
+        goes straight to Node 3 via the edge below, never back through Node 2 (see that
+        edge's own comment for why).
   Node 1c -> Node 3 — forward only, injected at patch time by
         scripts/appointment_lookup_recovery_graph.py (closes a SECOND gap found live at
         Physio Cure the same day, right after the edge above shipped: handing a resolved
@@ -30,8 +33,8 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
         so it improvised an out-of-contract confirm_time call and silently stalled a full
         turn waiting on the caller. node_1c's own lookup already resolves the exact
         appointment_type_id and last-seen practitioner from history, so RESULT DELIVERY below
-        calls confirm_service when {{return_node}} == "2" AND the caller accepted the REBOOK
-        GATE offer (added after a live Physio Cure repro showed the caller needs a chance to
+        calls confirm_service when {{return_node}} == "2" or "1" AND the caller accepted the
+        REBOOK GATE offer (added after a live Physio Cure repro showed the caller needs a chance to
         decline the offered service, not just be silently re-booked into it) — the same
         intent Node 2's own passthrough template uses, which routes to Node 3 via
         uni_router_intent == "service_resolved" (see scripts/validate_new_agent.py's
@@ -86,7 +89,7 @@ RESULT DELIVERY
 MANDATORY PART 1 (speak first): speak the message field verbatim from the successful result.
 MANDATORY PART 2 (same response — evaluate these branches top to bottom, first match only; {{booking_history_status}} == "suggestion" is checked BEFORE {{return_node}} even when both happen to be set at once — a "suggestion" always wins):
   {{booking_history_status}} == "suggestion" → call universal_router intent="book_intent", called_number, caller_id. Do not call wrap_up or confirm_service. OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation.
-  {{return_node}} == "2" → REBOOK GATE [NO TOOL CALL THIS TURN — the only branch of the three that doesn't call universal_router; the branches above and below both do]: this turn's entire spoken output is PART 1's message immediately followed by "Would you like to book another one?" Zero tool calls this turn — HALT and wait for the caller's reply. ({{return_node}} == "2" means the caller reached this node mid-booking, from Node 2 — resolving their identity is not the end of the call, and this lookup already resolved an exact service the caller has history with, so confirm they still want it before routing to availability.) Evaluate REBOOK GATE DECISION below on the caller's very next reply — do not re-evaluate this branch or repeat the message.
+  {{return_node}} == "2" OR {{return_node}} == "1" → REBOOK GATE [NO TOOL CALL THIS TURN — the only branch of the three that doesn't call universal_router; the branches above and below both do]: this turn's entire spoken output is PART 1's message immediately followed by "Would you like to book another one?" Zero tool calls this turn — HALT and wait for the caller's reply. (A caller reaches this node mid-booking either from Node 2's own self-lookup ({{return_node}} == "2") or from a node's own repeat-visit offer, e.g. physio_cure's Node 1 RETURNING PATIENT LOOKUP OFFER ({{return_node}} == "1") — either way, resolving their identity is not the end of the call, and this lookup already resolved an exact service the caller has history with, so confirm they still want it before routing to availability.) Evaluate REBOOK GATE DECISION below on the caller's very next reply — do not re-evaluate this branch or repeat the message.
   Any other value (including empty or "none") → call universal_router intent="wrap_up", called_number, caller_id. Do not call book_intent or confirm_service. OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation.
 Stop after whichever branch fires.
 
