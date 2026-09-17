@@ -1,0 +1,66 @@
+{
+  "_comment": "Focused probes for physio_cure's RETURNING PATIENT LOOKUP OFFER patch (2026-09-17).",
+  "scenarios": [
+    {
+      "name": "Repeat-visit booking for a named third party triggers the offer, not immediate book_intent",
+      "tags": ["core", "returning-offer"],
+      "history": [
+        {"role": "user", "content": "Hi, can I please book, uh, my next, uh, next appointment for Kevin Rolfs?"}
+      ],
+      "expected_behavior": "PASS only if the agent's entire spoken output is exactly 'If they've been to the clinic before I can find their previous appointment so you can easily book another. Would that be helpful?' with zero tool calls. FAIL if the agent instead acks and calls universal_router intent='book_intent' immediately (the old Signal 1 behavior) — the repeat-visit language 'next appointment' must trigger this offer block first."
+    },
+    {
+      "name": "Repeat-visit language buried after booking language still triggers the offer (not just when it opens the sentence)",
+      "tags": ["core", "returning-offer", "buried-trigger"],
+      "history": [
+        {"role": "user", "content": "Hi, can I book an appointment — my next one, actually, for Kevin Rolfs?"}
+      ],
+      "expected_behavior": "PASS only if the agent's entire spoken output is exactly 'If they've been to the clinic before I can find their previous appointment so you can easily book another. Would that be helpful?' with zero tool calls. FAIL if the agent instead acks and calls universal_router intent='book_intent' immediately — the leading 'book an appointment' phrasing must not cause Signal 1 to fire before the trailing 'my next one' repeat-visit language is scanned. This is the live failure mode found 2026-09-17: Haiku spoke Signal 1's ack ('Lovely! Let me get that sorted for you.') and skipped straight to book_intent/Node 2's category question, never asking the offer, because Signal 1's own zero-clarifying-questions rules (NO-DEFAULT RULE / CRITICAL EXECUTE RULE) were suppressing this block despite its priority-scan position."
+    },
+    {
+      "name": "Exact live failure transcript (2026-09-17): plain 'book next appointment for Kevin Rolfs' with no leave-message phrase must not let INTENT-IN-MESSAGE INTERCEPT's GATE fallback skip straight to Signal 1",
+      "tags": ["core", "returning-offer", "intercept-gate-bypass"],
+      "history": [
+        {"role": "assistant", "content": "You've reached Physio Cure AI receptionist! How can I help you?"},
+        {"role": "user", "content": "Hi, can I please book next appointment for Kevin Rolfs?"}
+      ],
+      "expected_behavior": "PASS only if the agent's entire spoken output is exactly 'If they've been to the clinic before I can find their previous appointment so you can easily book another. Would that be helpful?' with zero tool calls. FAIL if the agent instead speaks any Signal 1 ack (e.g. 'Lovely! Let me get that sorted for you.') and calls universal_router intent='book_intent' — this is the exact live call that failed on 2026-09-17. Root cause found afterward: INTENT-IN-MESSAGE INTERCEPT's GATE, evaluated earlier in the prompt, says 'this entire INTERCEPT block does NOT fire — skip it and continue to the next PRIORITY SCAN block below, then ROUTING SIGNALS' when no leave-message phrase is present (as here) — the GATE's fallback previously named 'SIGNAL 2B or SIGNAL 1' directly, which primed the model to jump straight past AI CAPABILITY REDIRECT and this RETURNING PATIENT LOOKUP OFFER block entirely, even though both sit between the GATE and ROUTING SIGNALS in the prompt. Fixed fleet-wide in nodes/node1_templates/*.txt (2026-09-17) plus a physio_cure-specific DISAMBIGUATION EXAMPLE anchoring this exact sentence."
+    },
+    {
+      "name": "Caller agrees to the offer — fires details_past with return_node=1",
+      "tags": ["core", "returning-offer"],
+      "history": [
+        {"role": "user", "content": "Hi, can I please book my next appointment for Kevin Rolfs?"},
+        {"role": "assistant", "content": "If they've been to the clinic before I can find their previous appointment so you can easily book another. Would that be helpful?"},
+        {"role": "user", "content": "Yes please"}
+      ],
+      "expected_behavior": "PASS only if the agent speaks 'Checking that now, one moment.' AND in the same response calls universal_router with intent='details_past', called_number, caller_id, and payload containing return_node='1'. FAIL if patient_name is included in the payload (this node's details_past call is phone-only, per the shared system prompt's NAME-ONLY SEARCH FORBIDDEN rule), or if return_node is omitted, or if the tool call and spoken phrase are not both present."
+    },
+    {
+      "name": "Caller declines the offer — falls through to Signal 1 book_intent immediately, same turn",
+      "tags": ["core", "returning-offer"],
+      "history": [
+        {"role": "user", "content": "Hi, can I please book my next appointment for Kevin Rolfs?"},
+        {"role": "assistant", "content": "If they've been to the clinic before I can find their previous appointment so you can easily book another. Would that be helpful?"},
+        {"role": "user", "content": "No, don't worry about it, just book it"}
+      ],
+      "expected_behavior": "PASS only if the agent speaks a Signal 1 ack (e.g. 'Of course!', 'Lovely!', 'Wonderful!') AND in the same response calls universal_router intent='book_intent' with called_number, caller_id, and a payload including booking_for='other' and family_member_name='Kevin Rolfs' (recalled from the original request two turns back). FAIL if the agent re-asks what service or re-asks who the appointment is for, or if it calls details_past instead of book_intent, or if it produces zero tool call this turn."
+    },
+    {
+      "name": "Plain booking request with no repeat-visit language — offer does not fire, Signal 1 fires immediately as before",
+      "tags": ["core", "regression"],
+      "history": [
+        {"role": "user", "content": "Hi, I'd like to book an appointment please."}
+      ],
+      "expected_behavior": "PASS only if the agent acks and calls universal_router intent='book_intent' immediately, with zero clarifying question and zero mention of finding a previous appointment. FAIL if the RETURNING PATIENT LOOKUP OFFER question is asked — 'book an appointment' alone, with no 'next'/'another'/'follow-up'/'usual'/'again' language, must not trigger it."
+    },
+    {
+      "name": "Caller states first-time/new-patient status in the same message as repeat-visit-sounding language — offer does not fire",
+      "tags": ["exclusion"],
+      "history": [
+        {"role": "user", "content": "Hi, this would be my first time, can I book an appointment please?"}
+      ],
+      "expected_behavior": "PASS only if the agent proceeds directly to Signal 1 (ack + book_intent, patient_status='new' in payload), with no RETURNING PATIENT LOOKUP OFFER question asked. FAIL if the offer question is spoken despite the caller explicitly stating this is their first time."
+    }
+  ]
+}
