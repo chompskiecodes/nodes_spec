@@ -12,8 +12,27 @@ Edges (wired via scripts/add_node1c_appointment_recovery.py — see its docstrin
         global self-lookup, per system_prompt.txt's PATIENT APPOINTMENT LOOKUP, had no
         route to this node on failure — confirmed live 2026-09-17 at Physio Cure):
     forward_condition  (2 -> 1c): appointment_lookup_failed == "true"
-    backward_condition (1c -> 2): uni_router_intent == "book_intent" — fires when
-        {{return_node}} == "2" (set by node2_templates/*.txt on the self-lookup payload)
+    backward_condition (1c -> 2): uni_router_intent == "book_intent" — fires ONLY for the
+        {{booking_history_status}} == "suggestion" path (an unrelated booking-history
+        recovery flow, see booking_history_graph.py). A caller returning here via
+        {{return_node}} == "2" does NOT use this edge — it goes straight to Node 3 via the
+        edge below, never back through Node 2 (see that edge's own comment for why).
+  Node 1c -> Node 3 — forward only, injected at patch time by
+        scripts/appointment_lookup_recovery_graph.py (closes a SECOND gap found live at
+        Physio Cure the same day, right after the edge above shipped: handing a resolved
+        booking-motivated caller BACK to Node 2 just relocated the stall — Node 2 is the
+        service-resolution node, not the availability node, and had no instruction for "the
+        exact service and practitioner are already known, skip straight to checking times",
+        so it improvised an out-of-contract confirm_time call and silently stalled a full
+        turn waiting on the caller. node_1c's own lookup already resolves the exact
+        appointment_type_id and last-seen practitioner from history, so RESULT DELIVERY below
+        now calls confirm_service directly when {{return_node}} == "2" — the same intent
+        Node 2's own passthrough template uses, which routes to Node 3 via
+        uni_router_intent == "service_resolved" (see scripts/validate_new_agent.py's
+        REQUIRED_PATHS: "Node 2 -> Node 3 (service_resolved)", and
+        scripts/patch_agent_edges.py's intent->DV MAP, for confirmation this is the live
+        condition on Node 2's own edge into Node 3):
+    forward_condition (1c -> 3): uni_router_intent == "service_resolved"
   Node 9 <-> Node 1c — ONE edge object for both directions (ElevenLabs allows exactly one
         edge per unordered node pair — confirmed live 2026-08-19, a two-directed-edge design
         was rejected 422 "Duplicate edge found"; see
@@ -57,9 +76,10 @@ Result found: go to RESULT DELIVERY below.
 
 RESULT DELIVERY
 MANDATORY PART 1 (speak first): speak the message field verbatim from the successful result.
-MANDATORY PART 2 (same response — read the DVs literally, first matching branch only):
-  {{booking_history_status}} == "suggestion" OR {{return_node}} == "2" → call universal_router intent="book_intent", called_number, caller_id. Do not call wrap_up. ({{return_node}} == "2" means the caller reached this node mid-booking, from Node 2 — resolving their identity is not the end of the call; hand them back to finish booking.)
-  Any other value (including empty or "none") → call universal_router intent="wrap_up", called_number, caller_id. Do not call book_intent.
+MANDATORY PART 2 (same response — evaluate these branches top to bottom, first match only; {{booking_history_status}} == "suggestion" is checked BEFORE {{return_node}} even when both happen to be set at once — a "suggestion" always wins):
+  {{booking_history_status}} == "suggestion" → call universal_router intent="book_intent", called_number, caller_id. Do not call wrap_up or confirm_service.
+  {{return_node}} == "2" → call universal_router intent="confirm_service", called_number, caller_id, payload={"appointment_type_id": "<appointment_type_id from this lookup's successful result>", "appointment_type": "<appointment_type from this lookup's successful result>", "practitioner_preference": "<the practitioner name this lookup's successful result returned (e.g. its next_appointment_practitioner_name field), only if one was returned — omit the key entirely if none was>"}. Never include practitioner_id in this payload — Node 3 resolves the actual practitioner from availability results, exactly like every other confirm_service call in this system. ({{return_node}} == "2" means the caller reached this node mid-booking, from Node 2 — resolving their identity is not the end of the call. Node 2 is the service-resolution node, not the availability node — this lookup already resolved the exact service and practitioner, so hand the caller straight to the availability node instead of back through Node 2.) Do not call book_intent or wrap_up.
+  Any other value (including empty or "none") → call universal_router intent="wrap_up", called_number, caller_id. Do not call book_intent or confirm_service.
 OUTPUT CONTRACT: this response MUST contain (1) the spoken message AND (2) the universal_router call — producing either without the other is a protocol violation. Stop.
 
 LEAVE MESSAGE FALLBACK (both the alternate-number and name+DOB paths have been tried and neither found the caller)
