@@ -2,6 +2,44 @@
 
 Read this before editing any node prompt. Each section documents recurring bugs and the proven fixes.
 
+Node 11 (Qwen) has its own dedicated pattern doc — see `.claude/rules/qwen-prompt-patterns.md`,
+not duplicated here. For shrinking an already-shipped node without regressing it (baseline
+self-audit → converse with the node's own model about specific candidates → verify behaviorally
+with a fresh instance), see `docs/elevenlabs-node-prompting-reference.md` §4.
+
+## Scope notes — generator exclusions and audit coverage
+
+**A clinic sitting in a generator's `EXCLUDED_CLINICS` (see `generate_node2.py`, `generate_node8.py`,
+etc.) is excluded from *template regeneration*, not from bug-fixing or from the guide-style
+conversion process (`docs/guide-style-conversion-blueprint.md`).** Those clinics' node files are
+hand-maintained precisely because they diverged too far from the family template to slot safely —
+that divergence doesn't make them safe to skip when a structural bug pattern below is found or
+when a conversion sweep runs. Treat an `EXCLUDED_CLINICS` entry as "fix by hand-editing this
+clinic's own `.txt`, then keep it in `EXCLUDED_CLINICS` so the next `generate_node*.py`/`fast_patch.py`
+run doesn't silently overwrite the hand fix" — never as "skip this clinic." The only nodes actually
+out of scope for review are under `nodes/retired/**` (see `.claude/rules/working-practices.md`).
+
+**Auditing every clinic node in the fleet is not required once a pattern is established.** The
+audit loop exists to confirm a *pattern* — one structural self-audit per pattern is sufficient
+(see the fleet-wide propagation check in `.claude/rules/working-practices.md`: "One audit per
+structural pattern is sufficient — do not re-audit every clinic"). As bug patterns and audit
+scores accumulate across nodes and clinics, use that emerging signal to infer where a node needs
+heavier corrective/preventative machinery (BLOCKING SIGNAL, MANDATORY PART, OUTPUT CONTRACT, an
+explicit NO-DEFAULT/EXCLUSION guard) versus where plain instructive prose already holds up —
+rather than re-running the full scenario battery from `docs/guide-style-conversion-blueprint.md`
+§6 against every remaining node before drawing that conclusion. Still confirm any structural fix
+or conversion against the specific clinic(s) it will ship to (per `docs/guide-style-conversion-blueprint.md`
+§4) — this is about not re-deriving the same pattern from scratch on every clinic, not about
+skipping verification on the clinic actually being changed.
+
+**`fast_patch.py`'s `compute_nodes_hash()` hashes a clinic's whole directory of `.txt` files
+together as one SHA256 (excluding `system_prompt.txt`), not per-file** — confirmed in
+`scripts/fast_patch.py`. Practical upshot: an `EXCLUDED_CLINICS` clinic's hand-maintained file
+still gets redeployed as-is whenever *any other* node file for that same clinic changes (the whole
+directory hash flips), but a fleet-wide generator/template fix that never touches that clinic's
+own files leaves its hash — and its content — untouched. Never assume a template-level fix
+reached an excluded clinic just because a subsequent `fast_patch.py` run for it showed activity.
+
 ---
 
 ## Node 2 — Service Resolution
@@ -19,7 +57,7 @@ TURN 1 -- Spoken question only. Universal_router MUST NOT be called during this 
 TURN 2 -- Only execute after the caller's next message explicitly states [sub-type]:
   [sub-type] -> working_id = "...". Call universal_router.
 ```
-**Model note:** `gpt-4.1-mini` cannot reliably HALT for SKIN_QUALITY and LED branches. Use `claude-haiku-4-5`.
+**Model note:** `gpt-4.1-mini` cannot reliably HALT for SKIN_QUALITY and LED branches. Use `claude-haiku-4-5`. A separate 50-test bakeoff also found `gpt-5-mini` too slow/reasoning-heavy for voice latency on this node — never use it for Node 2 either.
 
 ### CONFIRM_SERVICE SILENT RULE — add at top of prompt
 **Bug:** Haiku adds `system__message_to_speak` to confirm_service calls despite per-branch "ZERO spoken output".  
@@ -184,6 +222,32 @@ PRAC_VARIANT replaces VARIANT at the gate question step only — it does NOT rep
 ```
 **Key:** STEP 1 must say "HALT. Spoken turn only — zero tool calls." Without this, Haiku may combine the service question with a tool call on the same turn.
 
+### MENU_LIST OUTPUT HARD RULE — verbatim output, zero preamble
+**Confirmed live fleet-wide** (`nodes/node2_templates/node_2_a_category.txt` and siblings):
+```
+MENU_LIST OUTPUT HARD RULE: When MENU_LIST fires, output ONLY the MENU_LIST phrase. Zero preamble
+— no "I need to ask", "What brings you in", "Could I ask", or any opener before it. Any text
+before the MENU_LIST phrase is a protocol violation.
+```
+**Rule:** never present a list of service categories unprompted — only use MENU_LIST when no
+category has been identified yet, and list only top-level category names; sub-type/variant
+disambiguation happens later in the branch, not in the menu itself.
+
+### ENTRY SHORTCUT — same-category keyword collision
+**Confirmed live:** `nodes/clinics/meraki_holistic_health/node_2_service_resolution.txt` and
+`sai_clinic_ta_rabtik_health_london`'s Node 2 both carry an `ENTRY SHORTCUT` — distinct from the
+cross-category disambiguation above. Use this pattern when a generic caller term is ambiguous
+between a bookable and a non-bookable sub-type *within the same category* (e.g. a generic service
+name that could mean either a class or a 1:1 session) — place the shortcut above sub-type
+detection so it resolves before the branch's normal flow tries to guess.
+
+### Design-time corollary to NO-DEFAULT RULE
+When authoring a new clinic's Node 2 branches, add the disambiguation gate (tier/duration/subtype
+question) for every appointment-type split that actually exists in Cliniko — including for the
+simplest single-category clinic. Never default to a smaller branch count to reduce authoring
+effort; an unasked split becomes a silent-default NO-DEFAULT RULE bug the first time a caller
+picks the non-default variant.
+
 ---
 
 ## Node 3 — Availability Handler
@@ -293,6 +357,46 @@ Do NOT include system__message_to_speak in any universal_router payload.
 ```
 Do NOT add "(exception: CONFIRMATION block only)" to this line. Keep prohibitions exception-free; the CONFIRMATION block's own SCOPED EXCEPTION handles its override separately.
 
+### DAY MISMATCH must offer the waitlist for the originally-requested day in the same turn
+**Bug (fixed and live-patched fleet-wide, 2026-09-18):** the DAY MISMATCH branch (fires when a
+caller names one specific day and the search result has slots on a different day) offered the
+alternate day but never mentioned the waitlist for the day the caller actually wanted, even for
+`waitlist_enabled="true"` clinics — the waitlist was only reachable generically, after the caller
+declined every alternate, via EXHAUSTED OPTIONS. **Fix:** DAY MISMATCH now stores the original
+day as `requested_day_unavailable` and offers the waitlist for it in the same turn as the
+alternate, not gated behind a decline; `WAITLIST REQUEST`/`EXHAUSTED OPTIONS`'s own `waitlist_add`
+payloads fall back to `requested_day_unavailable` when `confirmed_day` isn't set. Shipped across
+all 4 P1–P4 slim templates and regenerated to all 32 clinics. **Unaudited sibling gap:**
+MULTI-DAY SLOT OFFER and SUMMARY's own day-list paths were not touched by this fix and may have
+the identical "alternate offered, no same-turn waitlist mention" shape — check them first if a
+similar complaint surfaces.
+
+### A hand-maintained `OPERATING DAYS:` override has nothing keeping it in sync
+Two clinics (`shire_osteopath`, `yandina_podiatry`) carry a hand-written `OPERATING DAYS:` string
+in their Node 3 file. Nothing keeps that string synced to the clinic's real
+`practitioner_schedules` rows or to the clinic's own KB — cross-check both whenever a clinic has
+one, rather than trusting the override string as ground truth (a stale one caused Yandina's own
+Friday-availability bug, fixed 2026-09-18 — see `project_operating_days_override_yandina_friday_fix_2026_09_18` in memory).
+
+### PRACTITIONER LIST REQUEST — trigger and exclusion must not overlap in phrasing
+**Bug (fixed and live-patched fleet-wide, 2026-09-18):** the P2/P3 `PRACTITIONER LIST REQUEST`
+route's own positive trigger examples included "is [name] working [day]?", while its "NOT this
+route" exclusion said naming one specific practitioner is never this route "even when a service
+or day is also named" — a direct self-contradiction that could skip a real availability search.
+**General lesson:** whenever a route lists concrete trigger examples (per the "concrete beats
+vague" principle elsewhere in this doc), cross-check those same examples against that route's own
+exclusion clause for phrasing overlap — a positive example that also matches the negative
+exclusion is a live bug, not just a style nit.
+
+### Discovery/escape routes inherit locked defaults unless given their own explicit field list
+A route described as "same params as step N" silently inherits step N's locked state — e.g. a
+practitioner-agnostic discovery question inheriting a locked `practitioner_id`, or a stale
+`appointment_type` name outliving the `appointment_type_id` it was locked to. **Fix:** give the
+route its own explicit field list with a LOCK/omission rule as the first line of its body, plus a
+header tag naming what it does and does not carry forward — this is the Qwen `TOOL LOCK` pattern
+(`.claude/rules/qwen-prompt-patterns.md` Rule 9), confirmed to transfer to Haiku nodes too, not
+just Qwen ones.
+
 ---
 
 ## Node 6 — Name Collection (Haiku-slim, experimental — see `.claude/rules/node6-haiku-slim-design.md`)
@@ -315,6 +419,37 @@ must withhold the other source (no textual restatement) or it doesn't actually t
 model can flag "the written rule doesn't explicitly cover source X" even when every existing
 scenario coincidentally passes anyway. Treat a stumbling point about an unhandled data source as
 actionable even at a 100% scenario pass rate; don't dismiss it just because nothing failed.
+
+### EMAIL collection pattern set (confirmed live, `nodes/shared/node_6a_name_collection_self.txt` §3)
+Independently confirmed against the current live file:
+- **Spoken→written assembly + confirmation:** last names are always spelled back
+  letter-by-letter uppercase ("S, M, I, T, H — is that right?"); email confirmation escalates to
+  anchor-word letters on a retry that doesn't land the first time.
+- **Ambiguous decline needs its own question:** "just message me"/"text me instead" is a distinct
+  outcome (`EMAIL-CAPTURE-VIA-SMS`) from a plain decline — it routes through a `MOBILE CHECK`
+  gate before the booking payload gets `email_capture_requested: true`; a plain decline never
+  sets that field.
+- **A full restatement replaces, it doesn't merge:** correcting an already-confirmed field
+  overwrites it and re-applies the same confirm judgement, then resumes wherever collection had
+  reached — never re-asks a field already resolved before the correction.
+- **Two failed attempts → offer to skip, not a forced third ask:** "two replies in a row [that
+  are] neither a usable address nor a clear decline" offers to skip instead of asking again; a
+  third failed correction attempt on an already-partially-collected address gets the same offer.
+- **Name/email correction economy (NAME CROSS-CHECK, once email is confirmed):** a same-sounding
+  1–2 character mismatch that reads like an ASR slip (stored "Jukes", email spells "Dukes") is
+  silently corrected to the email's spelling, no question asked; a 3+ character or
+  no-real-resemblance mismatch gets an explicit disambiguating question instead.
+
+### A call-init-only DV needs to name its own provenance in its own gate
+**Confirmed live** in `kynd_psychology`/`morgana_walker_psychology`'s per-clinic `node_6a` forks
+(their `RETURNING ATTENDEE CHECK` section, gated on `{{previous_attendee_names}}`): the gate
+explicitly states the DV "is a real appointment-history lookup done at call start, not something
+the caller's own words this call ever set" — a caller saying "my partner" or naming a companion
+earlier in the same call does NOT put a value into that DV and does NOT satisfy the gate. **Why
+this matters generally:** any DV that's only ever populated at call init (never by anything the
+prompt itself sets mid-call) needs this same explicit provenance statement in whatever gate reads
+it — otherwise the model can conflate "the caller said something conceptually similar" with "the
+DV has a value," especially under a busy multi-condition `EVALUATE FIRST` list like this one.
 
 ---
 
@@ -385,6 +520,121 @@ For tool-call turns that speak only the mandated filler phrase:
 
 ---
 
+## Handoff and escape-route risk under guide-style conversion
+
+Handoffs and escape routes (transfer to human, booking-tool handoff, info-pivot detour) are the
+single highest-risk category when converting a node from strict machinery to loose, narrative
+guide-style prose (`docs/guide-style-conversion-blueprint.md`). The strict machinery
+(BLOCKING SIGNAL, MANDATORY PART 1/2, OUTPUT CONTRACT) exists specifically to suppress two things
+guide-style's own conversational register re-introduces by design: talking more than intended,
+and drifting off a mandated silence under conversational pressure. Losing the structural
+constraint doesn't remove the underlying LLM prior — it just removes the thing that was holding
+it back. Treat every handoff/escape route in a guide-style draft as needing the same runtime
+behavior as the strict version, expressed as a positive instruction rather than a MINI-FRAMEWORK
+block (see §5 of the blueprint), and test it explicitly rather than assuming loose prose that
+"reads fine" preserves it.
+
+### Failure mode 1 — the filler-only turn breaks into over-talking
+**Risk:** in strict machinery, a handoff turn is forced to be exactly one filler phrase (see
+"Per-route filler-phrase format" above) plus the tool call, nothing else. Guide-style prose that
+merely *describes* the handoff ("let the caller know you're connecting them, then transfer")
+gives the model room to pad: `"Sure, I can help you transfer. Let me get that sorted for you.
+Please hold on while I connect you."`
+**Why it breaks the system:** extra spoken text on a handoff turn can delay the tool call's
+execution, cause audio overlap with the transfer/booking action, or violate the output contract
+the orchestrator expects for that turn.
+**Fix:** the guide-style instruction must still name the exact filler phrase (or the node's
+approved filler set) and state explicitly that it is the *only* spoken content for that turn —
+not "say something to reassure the caller before transferring." Loose register describes *what*
+to do; it must not loosen *how much* gets said on a handoff turn.
+
+**Concrete template** (adapt the phrase and tool name to the node's own approved filler set —
+this is the shape to copy, not literal text to reuse verbatim; see Failure mode 4 below for why
+the tool call line must also name its own parameters, not just describe "trigger the tool"):
+```
+When transferring the caller to a human agent, your only job is to say a single short phrase
+to keep them warm (use: "Let me get someone to help you with that.") and immediately call
+transfer_to_number with transfer_number={{transfer_number}}, client_message set to that exact
+same phrase, and agent_message set to a one-line reason for the receiving human (e.g. "Caller
+requested to speak with clinic staff."). Do not add any extra polite phrases, do not explain the
+transfer process, and do not speak after the tool call is initiated.
+```
+This works because it does four things a vaguer instruction skips: names the exact phrase
+(not "something reassuring"), states the phrase count is one, explicitly forbids the two places
+padding creeps in (before the tool call and after it) rather than only warning against padding in
+general, and names the actual tool call shape — including both of `transfer_to_number`'s own
+message parameters — rather than leaving "trigger the transfer tool" to the model's guess.
+
+### Failure mode 2 — the genuinely-silent turn erodes under pressure
+**Risk:** some escape routes require zero spoken output (see CONFIRM_SERVICE SILENT RULE /
+FILLER OVERRIDE above). A guide-style draft that just says "transfer silently" or "hand off
+without speaking" is not enough — under conversational pressure an LLM's helpfulness/politeness
+prior is strong enough to override a bare silence instruction and add a stray "Okay!" or "One
+moment" anyway, exactly like the strict-prompt version of this bug did before the explicit
+OVERRIDE clause was added.
+**Fix:** a guide-style silent turn needs the same explicit, scoped override this file already
+documents for strict machinery — state plainly that this specific call type suspends the
+general filler-phrase expectation, not just that it "should" be silent. A silence claim with no
+override statement should be treated as unverified until tested (see the adversarial test below).
+
+### Failure mode 3 — info-pivot detours don't resume, they loop
+**Risk:** this is the same underlying bug as INFO PIVOT RETURN (Node 2, above) and the Node 2C
+"Node-local escape routes silently absorbing a more specific system-prompt rule" entry, but it
+recurs specifically in guide-style drafts because loose prose is more likely to describe the
+detour ("answer their question, then continue booking") without stating the resumption rule
+precisely. Caller asks a side question mid-flow (pricing, location) → model correctly answers it
+→ instead of resuming the main flow at the next caller turn, the model repeats the informational
+tool call, re-asks a question the caller already answered before the detour, or stalls.
+**Fix:** state explicitly that once the detour is answered, the model evaluates the caller's next
+message fresh against the main flow — never replays a prior tool call from history, and never
+treats the detour as having consumed a step of the main flow it didn't actually answer.
+
+### Failure mode 4 — the warm phrase drifts from the tool's own message parameters
+**Risk (found via external LLM review, 2026-09-19 — see below):** a handoff instruction that only
+tells the model to "say a phrase and trigger the tool" describes the spoken line as free-floating
+agent output, when the live `transfer_to_number` tool actually takes its own `client_message`
+(the text voiced to the caller during transfer) and `agent_message` (context for the receiving
+human, never spoken) parameters — confirmed against this repo's only live transfer pattern,
+`nodes/shared_agent_transfer/system_prompt.txt`'s TRANSFER TO CLINIC block (also mirrored in
+`nodes/clinics/intuitive_health_and_wellness/node_8_information_handler.txt`). An instruction that
+never names these parameters risks the model calling the tool with `client_message`/`agent_message`
+empty, or with text that has drifted from the spoken phrase — the two must match, and
+`agent_message` needs its own one-line content.
+**Fix:** name the exact tool call shape, not just "trigger the tool" — see the corrected
+`transfer_to_number` line in Failure mode 1's Concrete template above.
+**Provenance:** this was caught by asking an external model to critique the plain "Concrete
+template" text (framed explicitly as text-under-review, not an instruction to follow — the
+review-framing pattern from [[feedback_guide_style_node_method]] applied to a single paragraph
+rather than a whole node). It was one of several claims returned alongside some that did NOT
+hold up — see the reviewer-uniformity caution in `docs/guide-style-conversion-blueprint.md` §8
+before trusting an external critique pass at face value.
+
+### Adversarial test additions for handoff/escape-route conversions
+These extend `docs/guide-style-conversion-blueprint.md` §6.3 (Universal silent-routing/filler
+tests) — run them against any guide-style draft with a handoff or escape route, in addition to
+the node-specific battery in §6.1/6.2:
+
+- **Filler-only turn test:** trigger the handoff. Verify spoken output is exactly one approved
+  filler phrase, `system__message_to_speak` is empty or omitted, and nothing else is said before
+  or after — same test as §6.3, restated here because it's the single most common guide-style
+  regression.
+- **Genuinely-silent turn test:** trigger a call type the draft claims is silent. Verify the
+  actual output has zero spoken content — don't accept the draft's own claim of silence without
+  running this, since the failure mode above is exactly a model overriding that claim under
+  pressure.
+- **Interrupt-during-handoff / pressure test (new):** simulate the caller interrupting or
+  reversing course at the exact moment the handoff would fire — "wait, don't transfer me yet",
+  "actually hold on", talking over the filler phrase. Verify the model does not fire the tool call
+  with stale or dropped parameters, does not silently proceed with the transfer against the
+  caller's just-stated reversal, and does not abandon required fields mid-transition — it either
+  completes the handoff correctly or cleanly aborts back into the main flow, never a half-state.
+- **Info-pivot resume test:** mid-flow, ask an info/pricing/location question the node answers
+  inline, then continue the original flow with the caller's next message. Verify the model
+  evaluates that next message fresh — no repeated tool call, no re-asked already-answered
+  question, no stall.
+
+---
+
 ## No price in duration question
 
 Never include price in a duration selection question. Ask "45 or 60 minutes?" not "45 minutes ($135) or 60 minutes ($179)?".
@@ -418,6 +668,25 @@ asking about all of them is bounced back to picking one.
 assistant, not caller-facing text; the shared system prompt said "speak `note` field verbatim" and
 would have read the instruction aloud.
 
+**When `spoken_summary` comes back empty:** `tools/service_families.py`'s `compose_spoken_summary`
+returns `""` when every candidate entry has a null price (confirmed via its own docstring: "an
+unpriced variant is worse than silence — the agent would say 'None'"). The node's own can't-
+retrieve fallback line handles that case — it is NOT a signal for the node to invent or re-derive
+a summary itself. Null/unpriced entries are dropped before composition; never read a bare "None"
+aloud for one.
+
+### OPENER RULE — fleet-wide example phrases get recited literally, ignore clinic facts
+**Bug (fixed live, 2026-09-18 — commit `0ee2edcd`):** the shared system prompt's `OPENER RULE`
+listed "Sure thing — which location works for you?" as a generic warmth-phrase example. A
+single-location clinic's own Node 3 explicitly says location is fixed and never asked — but the
+model recited the fleet-wide example phrase verbatim anyway, mid-call, confusing the caller.
+**Lesson:** any fleet-wide example phrase in the shared system prompt must stay clinic-agnostic —
+don't use a real question type (location, a specific service name, a specific gate) as an
+illustrative example, since some clinic's own node will have already ruled that exact question
+out. Same commit also fixed the P2/P3 `PRACTITIONER LIST REQUEST` self-contradiction documented
+under Node 3 above — both bugs were found from the same live call
+(`conv_5101m2ta1d1ne4pvvzb6p2pt7v0n`, Feel & Heal).
+
 ---
 
 ## Prompt fix regression risks
@@ -441,11 +710,41 @@ Risk: "when in doubt, include it" causes conditional rules to fire on benign que
 Check: Does your fix add vague "when in doubt" language?
 Fix rule: Sharpen trigger with concrete examples. Keep the condition genuinely conditional.
 
+**4. Stale scenario fixtures after a fleet-wide rule change**
+Risk: a shared-prompt-wide rule change (e.g. the OPENER RULE fix above) can leave
+`*_scenarios.json` files asserting the OLD rule's behavior — they then false-fail (or worse,
+false-pass) once the prompt is correctly updated, even though no node `.txt` is at fault.
+Check: grep every `*_scenarios.json` in scope for the old rule's language in the same session as
+any shared/system-prompt-wide change.
+Fix rule: update or remove the stale scenario assertions alongside the prompt fix, not as a
+separate later cleanup.
+
+**5. A hard ceiling exists — not every failure is a wording problem**
+Risk: assuming one more wording/placement/idiom variant will fix a failure that has already
+survived 2–3 escalating attempts, including an idiom this doc documents elsewhere as normally
+reliable for the node's model (see `feedback_haiku_prompt_length_ceiling_wording_fixes_dont_help`
+in memory — Physio Cure's Node 3 survived 5 escalating fixes at ~40K combined prompt tokens; a
+forced step-by-step audit-model walkthrough proved the rule was parseable and correct, and the
+real cause was recency-weighted conversational context beating a large prompt, not unclear
+wording).
+Check: has this exact failure shape survived 2–3 different wording/placement/idiom attempts
+already?
+Fix rule: stop iterating on wording. Do a forced step-by-step walkthrough with the audit model to
+confirm the rule is even parseable, then escalate to a non-wording lever — shorten the overall
+prompt, raise the node's LLM tier for the affected pattern, or move the guard server-side so it
+doesn't depend on the model following the instruction at all.
+
 ---
 
 ## Haiku instruction-following — what works and what breaks
 
-> **Node 3 is now `gpt-4.1` (2026-06-04).** These patterns apply to remaining Haiku nodes: Node 2, 6a/6b/6c, 7b, 8, 11. (Node 7 is now claude-sonnet-4-6 — see feedback_node7_sonnet_migration.md.) Do not apply them when editing Node 3 gpt-4.1 templates — gpt-4.1 uses its own structural patterns (SCOPE CLASSIFICATION, per-object extraction, explicit Stop markers).
+> **Current Haiku-LLM nodes (verify against CLAUDE.md's Node LLM map before trusting this list,
+> it changes on migrations): Node 1, 2, 3 (slim P1–P4), 6a, 6b, 9.** Node 6c and 7b are
+> `gemini-2.5-flash`, Node 7 is `gpt-5.4-mini`, Node 8 is `gpt-4.1`, Node 11 is `qwen35-397b-a17b`
+> (see `.claude/rules/qwen-prompt-patterns.md`). Do not port Haiku-specific wording idioms
+> (MANDATORY PART framing, BLOCKING SIGNAL, OUTPUT CONTRACT) to a non-Haiku node without checking
+> the model actually needs/supports them — gpt-4.1 and gpt-5.4-mini in particular have their own
+> failure modes (see the Node 8 and gpt-5.4-mini notes below).
 
 ### WHAT WORKS
 
@@ -474,3 +773,195 @@ Fix rule: Sharpen trigger with concrete examples. Keep the condition genuinely c
 **Blanket "(conditional)" on rules** — makes the rule optional by default. Remove conditional framing and use concrete trigger conditions with examples.
 
 **"The message is the complete spoken output for this turn"** — causes LLM to skip calling universal_router (treats "complete" as terminal). Never use "complete/terminal/entirety of" wording when a tool call still needs to follow.
+
+---
+
+## gpt-5.4-mini caution — do not port Haiku gate machinery without testing
+
+`reasoning_effort` is set **agent-wide in ElevenLabs, not per node** — confirmed absent from a
+per-node `conversation_config.agent.prompt` override object via direct API pull. At the fleet
+default of `low`, `gpt-5.4-mini` does not reliably execute MANDATORY-gate/BLOCKING-SIGNAL
+instructions ported straight from a Haiku node — KYND Psychology's gpt-5.4-mini pilot
+(nodes 1, 2, 3, 6a, 6b, 9) self-audited at Node 1 18→58/100, Node 2 23→42/100, Node 3 34→38/100 —
+far below the ~100 bar this repo normally requires before shipping
+(`.claude/rules/node-edit-verification.md`). Raising reasoning tokens fixed the gate-skips but
+measurably slowed every other gpt-5.4-mini node sharing that same agent, since the setting isn't
+scoped to one node. Node 7's own shared file (`nodes/shared/node_7_cancellation_handler.txt`,
+`gpt-5.4-mini` fleet-wide since 2026-09-15) holds up only because it barely uses BLOCKING-SIGNAL
+machinery to begin with — incidental, not a tested design choice. **Test any MANDATORY/BLOCKING
+port to a gpt-5.4-mini node with a real self-audit before shipping; prefer a backend-side guard
+over prompt machinery when a gate must be airtight on this model.** See
+`project_kynd_gpt54mini_pilot_reasoning_effort_2026_09_14` in memory for the full pilot writeup —
+note that memory also found a live-vs-git discrepancy (nodes marked "NOT yet live-patched" in
+their own commit messages were in fact live), so verify via a direct API pull, not commit
+messages, before trusting any "not yet live" claim for this pilot.
+
+---
+
+## Node 1 — Entry / Greeting Router
+
+### SINGLE-PRACTITIONER FACT — single-practitioner clinics need an explicit grounding fact
+**Bug:** a bare booking request with no practitioner named, at a single-practitioner clinic
+(Template D `node_1_single_appointment.txt` / Template F `node_1_single_appointment_psych.txt`),
+can produce a nonsensical practitioner-preference question ("do you have a practitioner
+preference, or would anyone be fine?") when there is only one practitioner to see.
+**Fix (live in both templates and in `bob_ward_physio`/`morgana_walker_psychology`'s per-clinic
+Node 1 files):** a `SINGLE-PRACTITIONER FACT` line stating the clinic's one practitioner name and
+explicitly forbidding the preference question — a negative-only prohibition wasn't reliable on
+its own without a positive grounding fact to anchor it to, the same shape as several Node 2/3
+NO-DEFAULT-style bugs elsewhere in this doc.
+
+### AI CAPABILITY REDIRECT — fleet-wide, but its trigger list has no bare-continuity exclusion
+`AI CAPABILITY REDIRECT` (fleet-wide across every clinic's Node 1 plus every `node1_templates/*`
+file) fires on phrases expressing uncertainty about who the caller has reached, including bare
+"is anyone there?"/"are you real?"-style phrases. As written, its trigger list has no carve-out
+for a caller checking call continuity after a barge-in (a bare "Hello?") who then states a real
+request in the same or next turn — a plausible false-fire path, not yet confirmed reproduced live.
+**Recommended fix, not yet applied:** a caller's substantive request in the same turn as (or
+immediately after) a bare continuity check should route normally instead of re-triggering the
+redirect; a standalone "Hello? Is anyone there?" with nothing else should still fire it. Flagged
+for a targeted session — this is a logic-affecting change and needs the standard node-edit
+verification loop (`.claude/rules/node-edit-verification.md`) before shipping, not a quick edit.
+
+---
+
+## Node 6c — Family Booking Confirm
+
+### Hand-maintained forks can silently omit gates the shared file has
+Node 6a/6b/6c have **no generator** — a per-clinic fork (`nodes/clinics/<slug>/node_6c_*.txt`) is
+a hand-copy of `nodes/shared/node_6c_family_booking_confirm.txt`, not a templated regeneration, so
+nothing keeps it in sync automatically. Confirmed live gap: `village_remedies`'s own
+`node_6c_family_booking_confirm.txt` fork has no `WAITLIST OFFER FOLLOW-UP` and no
+`CONSTRAINT PIVOT ESCAPE` handling, both present in the current shared file. **When auditing any
+Node 6a/6b/6c fork, diff its structure against the current shared file's equivalent sections —
+don't just check the fork for internal self-consistency.**
+
+---
+
+## Node 7b — Rescheduler
+
+### Cross-turn guard DVs must sit outside the routing-flag reset set
+A same-conversation "did the real cancel actually happen" guard DV
+(`cancellation_completed`, used in `nodes/shared/node_7b_rescheduler.txt`'s book-first reschedule
+flow) needs to survive an intervening successful tool call (e.g. an availability search) without
+being swept up in an unrelated routing-flag reset — otherwise a caller can abandon a book-first
+reschedule mid-flow while the OLD appointment is still live, with the agent implying it was
+already cancelled. **Pattern:** dedicate a DV for this kind of guard, explicitly excluded from
+any routing-flag reset set, and set it on both the true and false branch of the action it guards
+so it self-corrects without manual clearing.
+
+### A schema-documented intent is still callable even when a node's own prompt never mentions it
+`universal_router`'s shared tool schema documents intents (e.g. `waitlist_add`) that a given
+node's own prompt text may never reference. A caller asking for something mid-flow that matches
+an undocumented-in-this-node intent can get the LLM to improvise the call straight from the
+schema, skipping that node's own guards (e.g. Node 7b's cancel-guard above) and omitting fields
+the improvised call never knew to set. **Whenever a new `universal_router` intent is added
+anywhere in the fleet** (see the "Adding a new router intent" checklist in `CLAUDE.md`), check
+every node carrying the tool for whether it needs its own explicit signal for that intent — a
+schema-level enum entry does not by itself make an intent safe to reach from every node.
+
+---
+
+## Node 8 — Information Handler
+
+### TOOL RESTRICTION directly contradicts this node's own mandatory tool calls (live bug, unfixed)
+`nodes/node8_templates/node_8_template.txt` line 21, inside a block marked "absolute — evaluate
+before all other rules," states: `smart_voice_agent does not exist in this node and cannot be
+called here under any circumstances.` Line 58's "Permitted tool roster" and three mandatory call
+sites (`update_contact_detail` at line 137, and the pricing/duration and practitioner-availability
+intercepts around lines 239/262) all require calling `smart_voice_agent`. Risk: `gpt-4.1` reads
+the absolute prohibition first and silently breaks those flows under call pressure. **Fix (not yet
+applied — flagged for a targeted session, needs the standard verification loop):** remove
+`smart_voice_agent` from the TOOL RESTRICTION's prohibited list, or scope the restriction to name
+only tools genuinely never used in this node.
+
+### GPT-4.1 instruction-following — companion to the Haiku section above
+`gpt-4.1` applies global/FRAMEWORK/CRITICAL-REMINDERS-level directives OVER step-level
+conditionals when they conflict (first found on Node 3 before its 2026-07-20 migration off
+`gpt-4.1`; Node 8 is now the fleet's only node still on this model, so the pattern is directly
+relevant here). Fix pattern: (1) count/state-check FIRST at the step level ("Count the elements
+FIRST. Branch strictly on count:"); (2) explicit DO-NOT exclusion on the exception branch ("1
+slot — DO NOT apply X"); (3) flip blanket "MUST" reminders to conditional phrasing ("ask ONLY when
+[condition]"). Separately, an OUTPUT CONTRACT prohibition must name the exact forbidden phrase,
+never a blanket "any other text" — `gpt-4.1` applies broad negative rules globally and will
+suppress other valid spoken turns (e.g. a legitimate disambiguation question) along with the one
+the rule meant to block.
+
+### Currency symbol — not yet handled, flagged as a design gap
+The pricing intercept has no region/currency-symbol derivation today (checked directly against
+`nodes/node8_templates/node_8_template.txt` — no such logic exists). Every clinic prices in AU
+dollars implicitly. This becomes a real gap once a non-AU clinic goes live with Node 8 pricing
+questions (see the fleet's first non-AU clinics catalogued in memory) — needs a symbol derived
+from clinic region/`country_code`, applied consistently in both the price-only and combined
+price+duration sentences.
+
+---
+
+## Node 9 — Wrap-up
+
+### CLEAR DECLINE's exception clause needs a real matching route, not "route it instead"
+**Bug (fixed, fleet-patched 2026-09-11):** `CLEAR DECLINE`'s exception — "if it also contains a
+new request, route it instead" — had no concrete matching row for a general appointment-prep
+question, causing a silent fall-through where the call ended on a trailing genuine question
+anyway. **Fix:** widen the routing table to an explicit catch-all row with a real tool-call shape.
+**General lesson:** "route to X instead" is a silent no-op under model pressure unless X has an
+actual matching row — this applies well beyond Node 9.
+
+### SECURITY-FORCED EXIT — confirmed live, evaluated before every other rule in this node
+`nodes/shared/node_9_wrap_up.txt` carries a `SECURITY-FORCED EXIT` block (evaluated before
+`ENTRY GUARD`, `CLASSIFY THE REPLY`, and the `GOODBYE-ALREADY-SPOKEN RETRY GUARD`) plus a
+`GOODBYE-ALREADY-SPOKEN RETRY GUARD`, both `TOOL LOCK`ed to `end_call` only —
+`universal_router intent="wrap_up"` does not end the call and produces a duplicate goodbye if
+called from either guard. This closed two gaps: ordinary clarification phrases ("sorry?", "say
+again") were miscounted as a security strike, and even a correctly-fired security exit was only a
+soft routing intent — a caller who replied immediately after the spoken termination line fell
+through to normal routing, contradicting the promise just spoken. **Cross-reference:** this
+refines the "Handoff and escape-route risk under guide-style conversion" section above — that
+section frames spoken-termination-without-a-real-`end_call` as a risk specific to *loosening*
+strict machinery, but this bug shows the strict MANDATORY-PART/OUTPUT-CONTRACT version had the
+identical gap. Strict machinery is not immune to this failure mode either.
+
+### GOODBYE ECHO GUARD vs GOODBYE-ALREADY-SPOKEN RETRY GUARD — two related, both live
+One guard fires when no caller message arrived since the goodbye; a narrower one fires when a
+caller message arrived but only echoes the farewell ("bye") — a farewell-plus-new-content message
+("bye, oh wait, one more thing") correctly falls through to normal handling instead of triggering
+either guard. Both are `TOOL LOCK`ed to `end_call` only, same reasoning as SECURITY-FORCED EXIT.
+
+### An "edges never fire" report can actually be an intent-vocabulary mismatch
+**Bug (fixed fleet-wide, 2026-08-10):** Node 9 emitted `book_intent` where the wiring expected the
+`wrap_new_*` intent family — surfaced as "Node 9 has zero outgoing edges" when the real defect was
+the emitted intent name, not the edge wiring. **Fix:** before treating a "node never transitions"
+report as an edges/wiring bug, confirm the intent string the prompt actually instructs matches
+what the edges' forward/backward conditions check for.
+
+---
+
+## TTS Pronunciation Dictionary Patterns
+
+Confirmed live in `scripts/patch_pronunciation_dict.py`'s `CLINIC_PRONUNCIATION_RULES`/
+`_PODIATRY_RULES`. Rule-type choice: use `phoneme` (ARPABET) when the mispronounced target still
+looks like a real word ("Podiatry", "Cliniko") — an `alias` respelling for a real-word-looking
+target gets re-G2P'd by the TTS on top of the respelling, which is unreliable. Use `alias` to
+force letter-by-letter/acronym reading ("ADHD" → "A-D-H-D", "EPC", "DVA", "FPES", "NDIS", "WC").
+**Update gotcha:** remove the old rule before adding its replacement — the ElevenLabs API doesn't
+do this for you. Reuse fleet constants (e.g. `_PODIATRY_RULES`) rather than retyping phonemes
+per clinic. **Sync requirement:** any node spelling-out convention for a domain/acronym needs a
+matching alias rule — see the EMAIL CAPTURE pattern in the Node 6 section above. **Coverage gap:**
+the 3 outbound re-engagement campaign agents (`OUTBOUND_DAYRESCHED_AGENT_ID` etc., not in
+`clinic_agent_ids.json` — see `reference_outbound_agent_ids_and_pronunciation_dict` in memory)
+are attached to the shared dict via a one-off script, not `CLINIC_PRONUNCIATION_RULES` itself —
+any new rule that should reach them needs a manual attach or an `agent_ids_override` entry.
+
+---
+
+## Spoken clinic identity — `custom_name` is live TTS output, not cosmetic
+
+`clinics.custom_name` (falling back through `display_name`/`business_name` — confirmed via
+`COALESCE(custom_name, display_name, business_name)` in `tools/twilio_init_webhook.py`) is read
+directly into the spoken greeting and in-call references, never mediated by node prompt text or a
+pronunciation rule — a typo there is spoken verbatim to every caller with no safety net (see
+`project_clinic_name_drift_fix_2026_09_16` in memory for a confirmed real incident). Any new-clinic
+build or name audit should read `custom_name` aloud against the verified real business name and
+prioritize it over a plain `clinic_name` mismatch, since only `custom_name` is guaranteed spoken
+every call. Distinct from Node 2's `LOCATION NAME ALIAS` pattern above, which is routing logic,
+not raw TTS output.
