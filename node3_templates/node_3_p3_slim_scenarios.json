@@ -1363,6 +1363,106 @@
       "tags": [
         "type-lock-discovery"
       ]
+    },
+    {
+      "name": "PD-1 — DAY-FILTER excludes a service-matched practitioner not working today",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to book a physiotherapy appointment today please."
+        }
+      ],
+      "dvs": {
+        "current_time_local": "2026-09-21 09:00",
+        "timeframe_raw": "today",
+        "practitioner_services": "Priya Nair=Physiotherapy|Tom Walsh=Physiotherapy|Sam Kim=Physiotherapy",
+        "practitioners_with_ids": "Priya Nair:p1, Tom Walsh:p2, Sam Kim:p3",
+        "practitioner_working_days": "Priya Nair=Tue;Wed;Thu, Tom Walsh=Mon;Wed;Fri, Sam Kim=Mon;Tue;Fri"
+      },
+      "expected_behavior": "2026-09-21 is a Monday. Priya Nair does not work Mondays per practitioner_working_days; Tom Walsh and Sam Kim do. PASS if the agent asks 'Did you want to book with Tom Walsh or Sam Kim, or is anyone fine?' (Priya Nair excluded) with no date/day prefix ('for today' etc). FAIL if Priya Nair is included in the offered names, if the question is skipped, or if a day/date is prepended to the question.",
+      "tags": [
+        "practitioner-day-filter"
+      ]
+    },
+    {
+      "name": "PD-2 — DAY-FILTER narrows to zero: must fall back to the full unfiltered list, never claim nobody's available",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to book a physiotherapy appointment today please."
+        }
+      ],
+      "dvs": {
+        "current_time_local": "2026-09-21 09:00",
+        "timeframe_raw": "today",
+        "practitioner_services": "Priya Nair=Physiotherapy|Tom Walsh=Physiotherapy|Sam Kim=Physiotherapy",
+        "practitioners_with_ids": "Priya Nair:p1, Tom Walsh:p2, Sam Kim:p3",
+        "practitioner_working_days": "Priya Nair=Tue;Wed;Thu, Tom Walsh=Tue;Wed;Fri, Sam Kim=Tue;Thu;Fri"
+      },
+      "expected_behavior": "2026-09-21 is a Monday. None of the three service-matched practitioners work Mondays per practitioner_working_days — narrowing would remove everyone. PASS only if the agent falls back to the full unfiltered list and asks 'Did you want to book with Priya Nair, Tom Walsh, or Sam Kim, or is anyone fine?' (all three named). FAIL if the agent claims nobody is available, asks an empty/narrower question, or ends the turn without asking the practitioner question at all.",
+      "tags": [
+        "practitioner-day-filter"
+      ]
+    },
+    {
+      "name": "PD-3 — DAY-FILTER must NOT fire for an exact calendar date (requires date-to-weekday computation)",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to book a physiotherapy appointment for August the 15th please."
+        }
+      ],
+      "dvs": {
+        "current_time_local": "2026-06-01 09:00",
+        "timeframe_raw": "August 15th",
+        "practitioner_services": "Priya Nair=Physiotherapy|Tom Walsh=Physiotherapy|Sam Kim=Physiotherapy",
+        "practitioners_with_ids": "Priya Nair:p1, Tom Walsh:p2, Sam Kim:p3",
+        "practitioner_working_days": "Priya Nair=Tue;Wed;Thu, Tom Walsh=Mon;Wed;Fri, Sam Kim=Mon;Tue;Fri"
+      },
+      "expected_behavior": "An exact calendar date requires computing which weekday it falls on — zero-arithmetic boundary is NOT met, so DAY-FILTER must not apply. PASS if the agent asks from the full unfiltered list, naming all three practitioners ('Did you want to book with Priya Nair, Tom Walsh, or Sam Kim, or is anyone fine?'). FAIL if the agent silently computes August 15th's weekday itself and narrows the list using practitioner_working_days.",
+      "tags": [
+        "practitioner-day-filter"
+      ]
+    },
+    {
+      "name": "PD-4 — DAY-FILTER does not fire before a timeframe is known (regression guard)",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to book with Tom Walsh for a physiotherapy appointment."
+        }
+      ],
+      "dvs": {
+        "current_time_local": "2026-09-21 09:00",
+        "timeframe_raw": "",
+        "practitioner_services": "Priya Nair=Physiotherapy|Tom Walsh=Physiotherapy|Sam Kim=Physiotherapy",
+        "practitioners_with_ids": "Priya Nair:p1, Tom Walsh:p2, Sam Kim:p3",
+        "practitioner_working_days": "Priya Nair=Tue;Wed;Thu, Tom Walsh=Mon;Wed;Fri, Sam Kim=Mon;Tue;Fri"
+      },
+      "expected_behavior": "The caller already named Tom Walsh directly, so Parse resolves him by name (no 2+ match question is asked either way here) — this scenario checks that DAY-FILTER introduces no new behavior when timeframe_raw is empty. PASS if the agent silently stores confirmed_practitioner=Tom Walsh and proceeds to the TIMEFRAME QUESTION ('When would you like to come in?'), exactly as it would have before this fix. FAIL if the agent asks about a day, mentions working days, or behaves differently from ordinary named-practitioner resolution.",
+      "tags": [
+        "practitioner-day-filter"
+      ]
+    },
+    {
+      "name": "PD-5 — DAY-FILTER fires for \"next [weekday]\" (weekday name is stated directly; only WHICH calendar instance needs computation, not the weekday itself)",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to book a physiotherapy appointment next Thursday please."
+        }
+      ],
+      "dvs": {
+        "current_time_local": "2026-09-21 09:00",
+        "timeframe_raw": "next Thursday",
+        "practitioner_services": "Priya Nair=Physiotherapy|Tom Walsh=Physiotherapy|Sam Kim=Physiotherapy",
+        "practitioners_with_ids": "Priya Nair:p1, Tom Walsh:p2, Sam Kim:p3",
+        "practitioner_working_days": "Priya Nair=Tue;Wed;Thu, Tom Walsh=Mon;Wed;Fri, Sam Kim=Mon;Tue;Fri"
+      },
+      "expected_behavior": "\"Next Thursday\" directly states the weekday (Thursday) — DAY-FILTER only needs the weekday name, never which calendar date it lands on, so this qualifies as zero-arithmetic. Only Priya Nair works Thursdays per practitioner_working_days, narrowing the service-matched list to exactly 1 — this template's Parse step treats 0–1 matches as a silent skip. PASS if the agent silently stores confirmed_practitioner=Priya Nair with NO question asked, proceeding straight to the TIMEFRAME QUESTION (already answered here, so straight to BOOKING FLOW). FAIL if the agent asks using the full unfiltered 3-name list (treating this as requiring date-arithmetic), asks a disambiguation question despite only 1 match remaining, or computes/states a literal calendar date itself.",
+      "tags": [
+        "practitioner-day-filter"
+      ]
     }
   ]
 }
