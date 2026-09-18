@@ -1205,6 +1205,143 @@
         }
       ],
       "expected_behavior": "timeframe_raw is \"next Thursday\" \u2014 a bare day-of-week WITH a 'next' qualifier, one of the fix's own worked examples for the qualifier bucket. The agent should use the ORIGINAL phrasing: \"I don't have anything scheduled for next Thursday \u2014 I do have [both entries]. Which of those were you looking to cancel?\" \u2014 NOT the new bare-day-name phrasing (that bucket requires no qualifier at all). FAIL if the agent says \"I have a few next Thursday appointments\" or similar mangled phrasing, or omits the qualifier distinction. Zero tool call this turn."
+    },
+    {
+      "name": "CQB-1 (new) \u2014 regression: confirmation word bundled with a genuine question must NOT cancel silently (conv_7801m2sf1gyqfrbrvy0ncrf2dmw3, feel & heal)",
+      "tags": [
+        "confirmation-question-bundling"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Um, the, the appointment has been booked for 12:45 tomorrow."
+        },
+        {
+          "role": "assistant",
+          "content": "Let me check that."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"confirmation_required\": true, \"found_appointment_id\": \"444555666777888\", \"message\": \"I found your appointment on Saturday, September nineteen at twelve forty-five PM with Chanokmon Ning Watcharachanthanaweth. Is that the one you'd like to cancel?\", \"session_id\": \"sess_cqb1_001\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I found your appointment on Saturday, September nineteen at twelve forty-five PM with Chanokmon Ning Watcharachanthanaweth. Is that the one you'd like to cancel?"
+        },
+        {
+          "role": "user",
+          "content": "Yeah, what name is the appointment booked under?"
+        }
+      ],
+      "expected_behavior": "SIGNAL 0 PENDING CONFIRMATION EXCLUSION fires: the caller's reply contains the affirmative word 'yeah' AND a genuine question ('what name is the appointment booked under?'). This is NOT pure CONFIRMED. The agent must NOT call smart_voice_agent intent='cancel' this turn. Because the patient name on the booking is not present anywhere in the confirmation_required response (only date, time, and practitioner are), the agent must say so plainly (e.g. acknowledge that detail isn't available from this lookup) and re-state the found appointment (Saturday, September 19 at 12:45 PM with Chanokmon Ning Watcharachanthanaweth), then re-ask a clear yes/no confirmation ('Should I go ahead and cancel that one?'). FAIL if the agent proceeds straight to smart_voice_agent intent='cancel' without addressing the question (the original production bug), or if it fabricates a patient name not present in the tool response."
+    },
+    {
+      "name": "CQB-2 (new) \u2014 regression guard: plain confirmation with NO bundled question still cancels normally",
+      "tags": [
+        "confirmation-question-bundling"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like to cancel my Saturday appointment."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"confirmation_required\": true, \"found_appointment_id\": \"999888777666555\", \"message\": \"I found your appointment on Saturday, September nineteen at twelve forty-five PM with Chanokmon Ning Watcharachanthanaweth. Is that the one you'd like to cancel?\", \"session_id\": \"sess_cqb2_001\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I found your appointment on Saturday, September nineteen at twelve forty-five PM with Chanokmon Ning Watcharachanthanaweth. Is that the one you'd like to cancel?"
+        },
+        {
+          "role": "user",
+          "content": "Yeah, that's the one."
+        }
+      ],
+      "expected_behavior": "SIGNAL 0 PENDING CONFIRMATION fires and the EXCLUSION does NOT apply \u2014 'yeah, that's the one' contains no genuine question, just confirmation. Pure CONFIRMED: filler phrase + smart_voice_agent intent='cancel' with appointment_id=999888777666555 (from found_appointment_id), in the same response. FAIL if the agent withholds the cancel call, asks an unnecessary re-confirmation, or treats this as the EXCLUSION case."
+    },
+    {
+      "name": "MA-1 (new) \u2014 date-only cancel request hits missing_appointment: must ask 'different number?' not dead-end or speak the raw generic tool message",
+      "tags": [
+        "missing-appointment-date-only"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Hi, I'd just like to cancel an appointment that I made for tomorrow."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"missing_appointment\", \"message\": \"I couldn't find any appointments to cancel. Please check your details or call us directly.\", \"session_id\": \"sess_ma1_001\"}"
+        }
+      ],
+      "expected_behavior": "MISSING APPOINTMENT fires (error='missing_appointment', distinct from NOT FOUND, checked before ERRORS). Do NOT speak the raw tool message verbatim here \u2014 say exactly 'I couldn't find any bookings under this number. Was it booked under another number?' Zero tool calls this turn \u2014 do NOT call universal_router intent='wrap_up' (the old ERRORS catch-all behavior). FAIL if the agent speaks the raw 'Please check your details or call us directly' tool message, ends the call, or jumps straight to NAME+DATE LOOKUP/LEAVE_MESSAGE FALLBACK before asking about a different number."
+    },
+    {
+      "name": "MA-2 (new) \u2014 same number, caller gives date+time: retry lookup with BOTH fields as the security substitute",
+      "tags": [
+        "missing-appointment-date-only"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Hi, I'd just like to cancel an appointment that I made for tomorrow."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"missing_appointment\", \"message\": \"I couldn't find any appointments to cancel. Please check your details or call us directly.\", \"session_id\": \"sess_ma2_001\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I couldn't find any bookings under this number. Was it booked under another number?"
+        },
+        {
+          "role": "user",
+          "content": "No, it's this number. It's tomorrow at 12:45."
+        }
+      ],
+      "expected_behavior": "Caller kept the same number and gave BOTH a date ('tomorrow') and a time ('12:45') in one reply. MANDATORY: speak 'Let me check that for you, one moment.' AND in the same response call smart_voice_agent intent='cancel' with appointment_date reflecting 'tomorrow' AND appointment_time='12:45' (both fields \u2014 date+time together are the required identity substitute for this clinic-wide search), STANDARD FIELDS. FAIL if either appointment_date or appointment_time is omitted, or if the agent asks another clarifying question instead of retrying the lookup now that both are available."
+    },
+    {
+      "name": "MA-3 (new) \u2014 same number, caller gives ONLY a time (no date restated): must ask for the date too before retrying",
+      "tags": [
+        "missing-appointment-date-only"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Hi, I'd just like to cancel my appointment."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[smart_voice_agent response]: {\"success\": false, \"error\": \"missing_appointment\", \"message\": \"I couldn't find any appointments to cancel. Please check your details or call us directly.\", \"session_id\": \"sess_ma3_001\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I couldn't find any bookings under this number. Was it booked under another number?"
+        },
+        {
+          "role": "user",
+          "content": "No, same number. It was at 12:45."
+        }
+      ],
+      "expected_behavior": "Caller gave a time but no date anywhere in this call. BOTH date and time are required before retrying the lookup \u2014 a bare time alone is not enough. The agent must ask for the missing date (e.g. 'And what date was that for?') and wait; zero tool calls this turn. FAIL if the agent calls smart_voice_agent intent='cancel' with only appointment_time and no appointment_date, or fabricates a date."
     }
   ]
 }
