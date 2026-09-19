@@ -103,8 +103,14 @@ def _fail(text: str) -> Dict:
     return {"response": text, "type": "failure"}
 
 
-OFFER_QUESTION = (
+# STEP 1 has two wordings: OTHER when the request names someone other than the caller
+# ("for Kevin Rolfs"), SELF when the caller is booking for themselves.
+OFFER_QUESTION_OTHER = (
     "If they've been to the clinic before I can find their previous appointment so you "
+    "can easily book another. Would that be helpful?"
+)
+OFFER_QUESTION_SELF = (
+    "If you've been to the clinic before I can find your previous appointment so you "
     "can easily book another. Would that be helpful?"
 )
 
@@ -123,12 +129,12 @@ def generate_tests() -> List[Dict]:
             _m("user", "Hi, can I please book next appointment for Kevin Rolfs?", 2),
         ],
         "success_condition": (
-            f'Agent speaks exactly the RETURNING PATIENT LOOKUP OFFER question: "{OFFER_QUESTION}" '
+            f'Agent speaks exactly the RETURNING PATIENT LOOKUP OFFER question: "{OFFER_QUESTION_OTHER}" '
             f'with zero tool calls this turn. FAIL if the agent instead speaks a Signal 1 ack '
             f'(e.g. "Lovely! Let me get that sorted for you.") and calls universal_router '
             f'intent="book_intent" — that is the exact live failure mode being tested here.'
         ),
-        "success_examples": [_ok(OFFER_QUESTION)],
+        "success_examples": [_ok(OFFER_QUESTION_OTHER)],
         "failure_examples": [
             _fail("Lovely! Let me get that sorted for you."),
             _fail("[calls universal_router intent=book_intent]"),
@@ -143,12 +149,12 @@ def generate_tests() -> List[Dict]:
             _m("user", "Hi, can I book an appointment -- my next one, actually, for Kevin Rolfs?", 2),
         ],
         "success_condition": (
-            f'Agent speaks exactly: "{OFFER_QUESTION}" with zero tool calls this turn. FAIL if the '
+            f'Agent speaks exactly: "{OFFER_QUESTION_OTHER}" with zero tool calls this turn. FAIL if the '
             f'agent instead acks and calls universal_router intent="book_intent" immediately -- the '
             f'leading "book an appointment" phrasing must not cause Signal 1 to fire before the '
             f'trailing "my next one" repeat-visit language is scanned.'
         ),
-        "success_examples": [_ok(OFFER_QUESTION)],
+        "success_examples": [_ok(OFFER_QUESTION_OTHER)],
         "failure_examples": [
             _fail("Lovely!"),
             _fail("[calls universal_router intent=book_intent]"),
@@ -169,7 +175,7 @@ def generate_tests() -> List[Dict]:
             'language, must not trigger it.'
         ),
         "success_examples": [_ok("Lovely! [calls universal_router intent=book_intent]")],
-        "failure_examples": [_fail(OFFER_QUESTION)],
+        "failure_examples": [_fail(OFFER_QUESTION_SELF), _fail(OFFER_QUESTION_OTHER)],
     })
 
     # Regression check — first-time exclusion still works.
@@ -185,7 +191,7 @@ def generate_tests() -> List[Dict]:
             'spoken despite the caller explicitly stating this is their first time.'
         ),
         "success_examples": [_ok("Of course! [calls universal_router intent=book_intent patient_status=new]")],
-        "failure_examples": [_fail(OFFER_QUESTION)],
+        "failure_examples": [_fail(OFFER_QUESTION_SELF), _fail(OFFER_QUESTION_OTHER)],
     })
 
     # Continuation — caller agrees to the offer.
@@ -194,20 +200,85 @@ def generate_tests() -> List[Dict]:
         "chat_history": [
             _m("agent", greeting, 0),
             _m("user", "Hi, can I please book my next appointment for Kevin Rolfs?", 2),
-            _m("agent", OFFER_QUESTION, 5),
+            _m("agent", OFFER_QUESTION_OTHER, 5),
             _m("user", "Yes please", 8),
         ],
         "success_condition": (
-            'Agent speaks "Checking that now, one moment." AND in the same response calls '
+            'Agent speaks "Just a sec." AND in the same response calls '
             'universal_router with intent="details_past", called_number, caller_id, and payload '
-            'containing return_node="1". FAIL if patient_name is included in the payload, if '
+            'containing return_node="1", booking_for="other" and family_member_name="Kevin Rolfs" '
+            '(the request named Kevin). FAIL if patient_name is included in the payload, if '
             'return_node is omitted, or if the tool call and spoken phrase are not both present.'
         ),
         "success_examples": [
-            _ok('Checking that now, one moment. [calls universal_router intent=details_past return_node=1]')
+            _ok('Just a sec. [calls universal_router intent=details_past return_node=1 booking_for=other family_member_name=Kevin Rolfs]')
         ],
         "failure_examples": [
             _fail("[no tool call]"),
+            _fail("[calls universal_router intent=book_intent]"),
+        ],
+    })
+
+    # Self caller — the offer is worded "you/your", not the third-party "they/their".
+    tests.append({
+        "name": f"{p} REG6 — self repeat-visit request gets the self-worded offer ('you/your')",
+        "chat_history": [
+            _m("agent", greeting, 0),
+            _m("user", "Hi, can I please book my next appointment?", 2),
+        ],
+        "success_condition": (
+            f'Agent speaks exactly: "{OFFER_QUESTION_SELF}" with zero tool calls this turn. FAIL if '
+            f'the agent says "they"/"their" about the caller (the third-party wording), or if it '
+            f'instead acks and calls universal_router intent="book_intent" immediately.'
+        ),
+        "success_examples": [_ok(OFFER_QUESTION_SELF)],
+        "failure_examples": [
+            _fail(OFFER_QUESTION_OTHER),
+            _fail("Lovely! [calls universal_router intent=book_intent]"),
+        ],
+    })
+
+    # Named family member — keeps the third-party wording.
+    tests.append({
+        "name": f"{p} REG7 — named daughter request keeps the third-party offer ('they/their')",
+        "chat_history": [
+            _m("agent", greeting, 0),
+            _m("user", "Hi, I'd like to book a follow-up appointment for my daughter Sarah.", 2),
+        ],
+        "success_condition": (
+            f'Agent speaks exactly: "{OFFER_QUESTION_OTHER}" with zero tool calls this turn. FAIL if '
+            f'the agent says "you"/"your" (the request names someone other than the caller), or if '
+            f'it instead acks and calls universal_router intent="book_intent" immediately.'
+        ),
+        "success_examples": [_ok(OFFER_QUESTION_OTHER)],
+        "failure_examples": [
+            _fail(OFFER_QUESTION_SELF),
+            _fail("Lovely! [calls universal_router intent=book_intent]"),
+        ],
+    })
+
+    # Self caller agrees to the self-worded offer — STEP 2 accepts either STEP 1 wording.
+    tests.append({
+        "name": f"{p} REG8 — caller agrees to the self-worded offer, details_past with return_node only",
+        "chat_history": [
+            _m("agent", greeting, 0),
+            _m("user", "Hi, can I please book my next appointment?", 2),
+            _m("agent", OFFER_QUESTION_SELF, 5),
+            _m("user", "Yes please", 8),
+        ],
+        "success_condition": (
+            'Agent speaks "Just a sec." AND in the same response calls universal_router with '
+            'intent="details_past", called_number, caller_id, and payload containing '
+            'return_node="1" and nothing about a third party. FAIL if the payload includes '
+            'booking_for or family_member_name (the caller is booking for themselves), or if the '
+            'tool call and spoken phrase are not both present.'
+        ),
+        "success_examples": [
+            _ok('Just a sec. [calls universal_router intent=details_past return_node=1]')
+        ],
+        "failure_examples": [
+            _fail("[no tool call]"),
+            _fail("[calls universal_router intent=details_past return_node=1 booking_for=other]"),
             _fail("[calls universal_router intent=book_intent]"),
         ],
     })
