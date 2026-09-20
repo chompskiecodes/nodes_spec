@@ -27,7 +27,7 @@ Every clinic agent uses these same node IDs:
 | 3 (availability) | `gpt-4.1` | All clinics; P1/P2/P3 templates in `node3_templates/`; migrated from haiku 2026-06-04 (audit 92/100 vs haiku 72/100) |
 | 6a/6b (name collect) | `claude-haiku-4-5` | Promoted from `qwen35-397b-a17b` 2026-08-04; retired Qwen originals in `nodes/retired_qwen_node6/`, design + self-audit in `.claude/rules/node6-haiku-slim-design.md` |
 | 6c (family booking confirm) | `gemini-2.5-flash` | Migrated from claude-haiku-4-5 (nodes submodule commit 40b3b6a) |
-| 7 (cancellation) | `claude-sonnet-4-6` | Migrated from gpt-4.1 2026-06-15; 8/8 scenarios PASS; no TURN MODES required; MANDATORY PART 1/2 + [SILENT] pattern |
+| 7 (cancellation) | `claude-sonnet-5` | Back on Sonnet 5 2026-09-20 after the 09-15 gpt-5.4-mini switch stalled on entry and gpt-4.1 did not call the tool; prompt = the last proven Sonnet text + the fixes made since (record: `shared/node7_sonnet_verification/`, tracker `docs/in-progress/node7_entry_stall_gpt54mini_2026_09_20.md`); MANDATORY PART 1/2 + [SILENT] pattern. CLAUDE.md's Node LLM map is the authoritative table. |
 | 7b (rescheduler) | `gpt-5.4-nano` | Migrated 2026-05-29; 10/10 scaffold tests |
 | 8 (information) | `gpt-4.1` | Migrated from claude-haiku-4-5 2026-06-04; 92/100 GPT-4.1 self-audit vs 72/100 Haiku; fleet structural improvements applied |
 | 9 (wrap up) | `gpt-5.4-mini` | nano rejected 2026-06-06: D1 silent farewell (real failure, not scaffold artifact) + R1 intent misclassification; 11/13 |
