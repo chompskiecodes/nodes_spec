@@ -658,7 +658,7 @@
           "content": "[universal_router response]: {\"intent\": \"details\", \"message\": \"You have one upcoming appointment: Friday the 21st at 2pm with Sarah. Anything else?\"}"
         }
       ],
-      "expected_behavior": "DETAILS RETURN fires on a universal_router intent='details' result (as re-worded \u2014 the incorrect 'or smart_voice_agent called with intent=details' clause was removed from the header since smart_voice_agent has no details intent). Speak the message field verbatim, then in the same response call universal_router intent='wrap_up'. Do NOT ask what they want to do next. FAIL if the agent is confused about which tool result triggers this section now that the smart_voice_agent reference is gone, or fails to recognize this exact result as a DETAILS RETURN case."
+      "expected_behavior": "DETAILS RETURN fires on a universal_router intent='details' result. In ONE response: speak the message field verbatim ('You have one upcoming appointment: Friday the 21st at 2pm with Sarah. Anything else?') AND call the details_ack tool (the shared system prompt's TWO-PHASE delivery; universal_router has no details_ack intent). Do NOT call universal_router intent='wrap_up' in this response and do NOT ask what they want to do next. FAIL if wrap_up is called instead of details_ack, or if only one of the two (speech / details_ack) appears."
     },
     {
       "name": "NAMEDOB-1 \u2014 explicit don't-know on FIRST reply must skip straight to DOB offer, no re-ask",
@@ -1372,6 +1372,109 @@
         }
       ],
       "expected_behavior": "NAME MATCH fires ahead of the ordinal rule: the caller stated the name 'James' explicitly, which must be matched against the candidate list and win over the conflicting ordinal word 'first' (list position 1 is actually Maria, not James). Speak one filler phrase, then call smart_voice_agent intent='cancel' with appointment_id='222222222222222' (James's appointment) \u2014 NOT '111111111111111' (Maria's). FAIL if the agent selects Maria's appointment_id ('111111111111111') by following the ordinal 'first one' instead of the stated name 'James'. FAIL if the agent re-asks instead of resolving the name match, since 'James' unambiguously matches one listed candidate."
+    },
+    {
+      "name": "DUP-1 (regression, conv_5601m2y94sybfg4rk6zs8p6xrv7m) \u2014 turn triggered by details_ack 'in_progress': message already spoken, response must be empty",
+      "tags": [
+        "details-ack-no-repeat"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Um, no. So what appointments have I got so far? Twenty-third of October."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[universal_router response]: {\"intent\": \"details\", \"patient_lookup_done\": \"true\", \"message\": \"I can see one upcoming appointment on your account \u2014 that's Friday October the 23rd at 9:20 AM with Bruce.\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I can see one upcoming appointment on your account \u2014 that's Friday October the twenty-third at nine twenty AM with Bruce. [tool call: details_ack]"
+        },
+        {
+          "role": "tool",
+          "content": "[details_ack response]: {\"status\": \"in_progress\", \"message\": \"Executing the task in the background. Result will be reported later.\"}"
+        }
+      ],
+      "dvs": {
+        "patient_lookup_done": "true",
+        "details_delivered": ""
+      },
+      "expected_behavior": "BACKGROUND-RESULT TURN: the appointment message was already spoken in the assistant message that made the details_ack call, and the caller has not spoken since. PASS only if this response is EMPTY: SPOKEN is (silent) and TOOL is (none). FAIL if the appointment message (or any paraphrase of it) is spoken again, if details_ack is called again, or if any other speech/tool call appears."
+    },
+    {
+      "name": "DUP-2 (regression) \u2014 turn triggered by details_ack COMPLETED: response must still be empty",
+      "tags": [
+        "details-ack-no-repeat"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Um, no. So what appointments have I got so far? Twenty-third of October."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[universal_router response]: {\"intent\": \"details\", \"patient_lookup_done\": \"true\", \"message\": \"I can see one upcoming appointment on your account \u2014 that's Friday October the 23rd at 9:20 AM with Bruce.\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I can see one upcoming appointment on your account \u2014 that's Friday October the twenty-third at nine twenty AM with Bruce. [tool call: details_ack]"
+        },
+        {
+          "role": "tool",
+          "content": "[details_ack response]: Background task completed: {\"details_delivered\": \"true\"}"
+        }
+      ],
+      "dvs": {
+        "patient_lookup_done": "true",
+        "details_delivered": "true"
+      },
+      "expected_behavior": "BACKGROUND-RESULT TURN: details_ack completed, caller has not spoken since. PASS only if this response is EMPTY (SPOKEN (silent), TOOL (none)). FAIL if the appointment message is repeated, if universal_router intent='wrap_up' is called, or if details_ack is called again."
+    },
+    {
+      "name": "DUP-3 (regression) \u2014 after details were delivered the caller says 'Can you cancel that appointment?': must proceed to the cancel, not stay silent",
+      "tags": [
+        "details-ack-no-repeat"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Um, no. So what appointments have I got so far? Twenty-third of October."
+        },
+        {
+          "role": "assistant",
+          "content": "Checking that now, one moment."
+        },
+        {
+          "role": "tool",
+          "content": "[universal_router response]: {\"intent\": \"details\", \"patient_lookup_done\": \"true\", \"message\": \"I can see one upcoming appointment on your account \u2014 that's Friday October the 23rd at 9:20 AM with Bruce.\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "I can see one upcoming appointment on your account \u2014 that's Friday October the twenty-third at nine twenty AM with Bruce. [tool call: details_ack]"
+        },
+        {
+          "role": "tool",
+          "content": "[details_ack response]: Background task completed: {\"details_delivered\": \"true\"}"
+        },
+        {
+          "role": "user",
+          "content": "Can you cancel that appointment?"
+        }
+      ],
+      "dvs": {
+        "patient_lookup_done": "true",
+        "details_delivered": "true"
+      },
+      "expected_behavior": "The caller has spoken, so the BACKGROUND-RESULT TURN rule no longer applies. PASS if the response speaks a filler phrase (e.g. 'Just a sec.') AND calls smart_voice_agent intent='cancel' for that appointment. FAIL if the response is empty, repeats the appointment message, or calls wrap_up."
     }
   ]
 }
