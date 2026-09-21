@@ -45,7 +45,7 @@ across all 17 in-scope Family A clinics (`mri_first` excluded — see `EXCLUDED_
 | Slot | Description | Fleet default | Overridden by |
 |---|---|---|---|
 | `CONTEXT_PIGGYBACK_INTRO` | First header sentence | colon-ending boilerplate | 7 clinics |
-| `CONTEXT_PIGGYBACK_SCOPING` | Second header sentence (payload nesting rule) | boilerplate | 1 clinic (palm_beach — full rewrite as "CONFIRM_SERVICE PAYLOAD SCOPING:") |
+| `CONTEXT_PIGGYBACK_SCOPING` | Second header sentence (payload rule: on EVERY routing call the piggyback fields go inside payload) | boilerplate ("On every routing call (...), put these piggybacked fields inside the payload JSON object ...") | 1 clinic (palm_beach — keeps its INSIDE emphasis, labelled "PAYLOAD SCOPING:") |
 | `FAMILY_MEMBER_NAME_LINE` | The `- family_member_name:` bullet | 1-example boilerplate | 6 clinics (drop/add examples, reworded capture rule) |
 | `PIGGYBACK_PRACTITIONER_PREF_LINE` | The `- practitioner_preference:` bullet | plain "any practitioner name mentioned" | 1 clinic (palm_beach — PATTERN A/B/C validation-required version) |
 | `PATIENT_STATUS_LINE` | The `- patient_status:` bullet | 7-synonym boilerplate | 3 clinics (extra synonyms: "initial appointment", "as a new patient") |
