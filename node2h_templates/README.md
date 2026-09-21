@@ -4,7 +4,7 @@
 
 `node_2h_home_visit_intake.txt` is the prompt-body template for a new node ("Node 2h") that
 sits between Node 2 (service resolution) and Node 3 (availability) for clinics whose
-appointment types are all home/in-home visits — today, `mandys_routine_footcare` only. Note that
+appointment types are all home/in-home visits — `mandys_routine_footcare` was the only one (retired 2026-09-20; no live clinic uses it now). Note that
 several live clinics (Balrothery Physiotherapy Clinic, Cascade Women's Health, Northern Physio,
 Physio Cure, Yandina Podiatry) offer home-visit types *alongside* ordinary clinic-visit ones;
 they are deliberately NOT opted in. See `docs/home-visit-intake-node-design.md`. Its job:
