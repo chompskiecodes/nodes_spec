@@ -10,7 +10,7 @@ consistent with the documented 2026-04-15 incident where a batch_patch run witho
 first applied.
 
 Restores exactly the edge set documented in node_2c_complaint_intake.txt's header comment:
-  edge_node2c_service_pivot     N2C -> N2   FWD: change_service
+  edge_node2c_service_pivot     N2C -> N2   FWD: service_change
   edge_node2c_booking_self      N2C -> N6a  FWD: booking_self
   edge_node2c_booking_other     N2C -> N6b  FWD: booking_other
   edge_node2c_cancel_intent     N2C -> N7   FWD: cancel_intent
@@ -98,7 +98,14 @@ def _llm(label: str | None, condition: str) -> dict:
 NEW_EDGES: dict[str, dict] = {
     "edge_node2c_service_pivot": {
         "source": NODE_2C, "target": NODE_2,
-        "forward_condition": _expr("2C. Service Pivot", _eq("uni_router_intent", "change_service")),
+        # Bug fix 2026-09-22: the webhook emits uni_router_intent="service_change" for
+        # intent="change_service" (INTENT_TO_UNI_ROUTER_INTENT in tools/universal_router_webhook.py)
+        # — "change_service" is the tool-call intent name, not the DV routing value. Every other
+        # clinic's Node 2 checks {{uni_router_intent}} == "service_change" for this same hand-off.
+        # The original 2026-04-10 edge (via the now-deleted original patch_node2c_edges_ryde.py)
+        # had this right; this successor script, written from node_2c_complaint_intake.txt's own
+        # (then-wrong) header comment, reproduced the bug and pushed it live on 2026-09-09.
+        "forward_condition": _expr("2C. Service Pivot", _eq("uni_router_intent", "service_change")),
         "backward_condition": None,
     },
     "edge_node2c_booking_self": {

@@ -1,5 +1,30 @@
 # Ryde Health — Practitioner Due / Complaint Intake Integration
 
+## Status (2026-09-22) — edge_node2c_service_pivot dead edge fixed and re-deployed
+
+Found via the corrected fleet-wide `tests/test_nodes_expression_edges_uni_router_values_are_producible`
+test (previously a permanent no-op — non-recursive glob + a regex that never matched the plain-text
+edge syntax nodes actually use): `edge_node2c_service_pivot` (N2C → N2) was keyed on
+`uni_router_intent == "change_service"`, but `tools/universal_router_webhook.py`'s
+`INTENT_TO_UNI_ROUTER_INTENT` maps `intent="change_service"` to `uni_router_intent="service_change"`
+("change_service" is the tool-call intent name, not the emitted DV value) — the exact same bug class
+as the Node 4 "details" fix in commit 12a86835. Every other clinic's Node 2 checks
+`{{uni_router_intent}} == "service_change"` for this same hand-off, so this edge could never fire: a
+caller in Node 2C who wanted to change the requested service had no way to route back to normal
+service resolution. The original 2026-04-10 edge (via the now-deleted original
+`patch_node2c_edges_ryde.py`) had this right; the *successor* `patch_node2c_edges_ryde.py` (this
+folder, written 2026-09-09 from this file's own then-wrong header comment) reproduced the bug and
+pushed it live.
+
+Fixed same session: this file's header comment, `patch_node2c_edges_ryde.py`'s docstring + `_eq(...)`
+call, and re-ran the script against the live agent (verified via a fresh GET — the live edge now
+reads `uni_router_intent == "service_change"`). The same run also re-applied the `edge_new_node2_info_pivot`
+(N2↔N8) backward-condition tightening (`caller_complaint == "none"`), which a dry-run beforehand
+showed had drifted back to its untightened 2-clause form since the 2026-09-09 patch — cause not
+investigated (`scripts/add_node4_node1_and_book_edges.py`, today's fleet-wide Node1→Node4/Node4→Node2
+edge rollout, was checked and only *adds* new edge keys via `dict(edges)`, never touches existing
+ones, so it isn't the cause).
+
 ## Status (2026-09-09)
 
 Ryde unretired 2026-09-09. Audited Node 2C against the live agent before it took real calls
