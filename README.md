@@ -24,13 +24,13 @@ Every clinic agent uses these same node IDs:
 |------|-----|-----------|
 | 1 (entry router) | `claude-haiku-4-5` | Migrated fleet-wide from `gemini-2.5-flash` 2026-09-07 (this row was stale — corrected 2026-09-15, see CLAUDE.md's Node LLM map for the authoritative table and `scripts/generate_node1.py`'s `NODE1_TARGET_LLM`) |
 | 2 (service resolution) | `claude-haiku-4-5` | HALT-critical; gpt-4.1-mini fails |
-| 3 (availability) | `gpt-4.1` | All clinics; P1/P2/P3 templates in `node3_templates/`; migrated from haiku 2026-06-04 (audit 92/100 vs haiku 72/100) |
+| 3 (availability) | `claude-haiku-4-5` | This row was stale (said `gpt-4.1`) — corrected 2026-09-22 after verifying `LLM:` header across all 34 clinic `node_3_*.txt` files; all clinics, slim P1/P2/P3/P4 templates in `node3_templates/`, migrated to slim 2026-07-20 (was gpt-4.1 regular templates); see CLAUDE.md's Node LLM map for the authoritative table |
 | 6a/6b (name collect) | `claude-haiku-4-5` | Promoted from `qwen35-397b-a17b` 2026-08-04; retired Qwen originals in `nodes/retired_qwen_node6/`, design + self-audit in `.claude/rules/node6-haiku-slim-design.md` |
 | 6c (family booking confirm) | `gemini-2.5-flash` | Migrated from claude-haiku-4-5 (nodes submodule commit 40b3b6a) |
 | 7 (cancellation) | `claude-sonnet-5` | Back on Sonnet 5 2026-09-20 after the 09-15 gpt-5.4-mini switch stalled on entry and gpt-4.1 did not call the tool; prompt = the last proven Sonnet text + the fixes made since (record: `shared/node7_sonnet_verification/`, tracker `docs/in-progress/node7_entry_stall_gpt54mini_2026_09_20.md`); MANDATORY PART 1/2 + [SILENT] pattern. CLAUDE.md's Node LLM map is the authoritative table. |
 | 7b (rescheduler) | `claude-haiku-4-5` | This row was stale (said `gpt-5.4-nano`, predating even the 2026-06-06 `gemini-2.5-flash` migration) — corrected 2026-09-22 after promoting the EXIT GATE Haiku redesign to canonical (`docs/node7b-haiku-optimization-design.md`); see CLAUDE.md's Node LLM map for the authoritative table |
 | 8 (information) | `gpt-4.1` | Migrated from claude-haiku-4-5 2026-06-04; 92/100 GPT-4.1 self-audit vs 72/100 Haiku; fleet structural improvements applied |
-| 9 (wrap up) | `gpt-5.4-mini` | nano rejected 2026-06-06: D1 silent farewell (real failure, not scaffold artifact) + R1 intent misclassification; 11/13 |
+| 9 (wrap up) | `claude-haiku-4-5` | This row was stale (said `gpt-5.4-mini`) — corrected 2026-09-22 after verifying `nodes/shared/node_9_wrap_up.txt`'s own `LLM:` header; migrated to Haiku at some point after this table was last verified (see CLAUDE.md's Node LLM map for the authoritative table) |
 | 11 (error recovery) | `gemini-3.1-flash-lite-preview` | Cheapest/fastest |
 | 2C (complaint intake) | `claude-haiku-4-5` | |
 
