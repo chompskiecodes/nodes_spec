@@ -1,5 +1,105 @@
 # Ryde Health — Practitioner Due / Complaint Intake Integration
 
+## Status (2026-09-23, evening) — live call showed zero triage differentiation; root cause found; design proposal open
+
+Real call, same day as the two rewrites below: caller says "i hurt my back". Node 2C responds
+"back pain is really common, and physio, chiro, or osteo are all great at working out what's
+driving it... let me have a look at what's available" and goes straight into `recommend_availability`
+— no clarifying question at all, no attempt to differentiate between the three candidate
+categories. User flagged this as wrong: for a complaint where the clinic genuinely offers several
+meaningfully different approaches (hands-on/manual vs rehab/exercise, plus acupuncture as a
+further option), the caller should be asked something to help land on the right one — not
+necessarily a rigid question per complaint-modality permutation, but *some* triage signal beyond
+"they're all great."
+
+**Root cause, confirmed via `nodes` git history (`git log` on this file):** this is not a testing
+gap — the self-audit scenario suite was faithfully checking the behaviour the prompt was written
+to produce a few hours earlier, and that behaviour is what's now considered wrong.
+
+1. Commit `920775af` (the loose/LLM-driven STEP 1 rewrite, earlier the same day) replaced the old
+   DOC-1-table-driven mandatory question with a subjective bar: "Reserve a clarifying question for
+   when you're genuinely torn between two meaningfully different approaches... Ask at most ONE such
+   question." This bar has no concrete trigger — it relies on the model *feeling* torn, and Haiku
+   evidently does not feel torn about "back pain" even though physio/chiro/osteo are three
+   meaningfully different approaches to it.
+2. Commit `a12a2d28` (later the same day) fixed a *different*, real problem found in a call review:
+   STEP 4 was asking a low-value standalone timeframe question ("are you looking to get in soon...")
+   on nearly every call and skipping the modality explanation for "obvious" complaints like back
+   pain. That fix was scoped correctly to STEP 4 (timeframe question + modality_reason generation).
+   But the scenario added to verify it — **"Straightforward back pain gets a modality explanation,
+   never a soon/timeframe question"**, tagged `core` + `asap-default`, input `"my back hurts"` —
+   wrote its PASS criteria around the *combination* of both steps: "speaks a short, complaint-specific
+   reason... then moves straight toward checking availability... with no question in between." That
+   criteria is correct for STEP 4 (no timeframe question) but, because the test input is a bare
+   4-word complaint with zero differentiating detail, it *also* certifies STEP 1 skipping the
+   clarifying question entirely as correct — which was never the thing this scenario was written to
+   test, but is exactly what the real call did.
+3. Because that scenario is tagged `core`, it now runs on every future self-audit and will FAIL any
+   change that tries to make STEP 1 ask a differentiation question for a bare "my back hurts" —
+   i.e. the current scenario suite actively blocks the fix the user is asking for. It must be
+   rewritten (not just STEP 1) before any STEP 1 change can be verified honestly.
+
+**Lesson for future scenario-writing on this node, formalized below:** when a scenario is added to
+verify a fix to one STEP, scope its PASS/FAIL wording to that STEP's behaviour only. Don't let an
+input chosen for convenience (a bare, information-free complaint) silently also assert a verdict on
+a *different* STEP's decision (whether to ask a clarifying question at all) that the commit never
+intended to test.
+
+**Design proposal for STEP 1 (not yet implemented — see chat for the full writeup and the
+question posed back to the user before building this):** replace the subjective "genuinely torn"
+bar with a concrete signal check, prioritising the axes the user asked for:
+
+- **Primary default question (new):** when the caller has given no duration/history signal at all
+  ("since when", "on and off", "tried X before" — none present) and the landed category set has
+  2+ real candidates, ask ONE combined question surfacing both acuity and treatment history in one
+  breath — e.g. "How long has this been going on, and have you tried anything like physio, chiro,
+  or osteo for it before?" A chronic-with-prior-treatment answer often resolves the category choice
+  directly (whatever helped before) without needing a second question.
+- **Fallback question (existing, kept, retriggered):** only if the above didn't resolve it (acute,
+  or chronic with nothing tried before) AND the categories still meaningfully differ in approach,
+  ask the existing hands-on-vs-rehab plain-language question — optionally folding in acupuncture
+  ("...or would you be open to trying acupuncture for this?") when it's a real candidate, instead of
+  a third separate question.
+- Still never more than ONE question per turn (existing STEP 1 rule, kept). Still skip entirely
+  whenever the caller's own words already resolve it (existing rule, kept) — this is what keeps it
+  from reintroducing the old DOC-1 "scripted mandatory question on nearly every call" problem: the
+  question is skipped whenever the caller already volunteered the relevant signal, not whenever the
+  model subjectively decides it isn't needed.
+
+This changes the *default direction* of STEP 1 (ask unless signalled, vs. today's skip unless
+torn) — a genuine design choice, not a bug fix with one right answer, so it needs the user's
+sign-off on the shape above before it's written into the node and re-audited.
+
+## Triage question design & review process (formalized 2026-09-23, after the above)
+
+For any future session working on Node 2C's (or a future triage-enabled clinic's) clarifying-question
+logic:
+
+1. **Source real failures from call transcripts, not assumption.** A scenario written from
+   imagination tends to encode whatever the prompt already does. Pull the actual caller wording.
+2. **Separate the two concerns explicitly when reading or editing this node:** STEP 1 decides
+   *which category and whether to ask a clarifying question*; STEP 4 decides *what to say once a
+   category is chosen* (modality reasoning) *and the timeframe*. A fix to one must not be verified
+   only through a test scenario whose input/PASS-criteria silently also asserts a verdict on the
+   other's untested behaviour.
+3. **Scope every new scenario's `expected_behavior` text to the one behaviour the commit changed.**
+   If the chosen test input could also exercise a different, not-yet-decided behaviour (e.g. a bare
+   complaint with no signal, which also exercises "should I ask a clarifying question"), either (a)
+   write the PASS criteria to cover both axes deliberately, or (b) pick an input that doesn't
+   incidentally certify the untested axis.
+4. **A change to the clarifying-question trigger threshold is an architecture/design decision, not
+   a data-driven bug fix** — confirm the specific framework (which axes, what counts as "enough
+   signal to skip") with the user before rewriting STEP 1, the same way the 2026-09-23 loose
+   rewrite and the practitioner-specialty removal were both done per explicit user direction.
+5. **After any STEP 1 edit, don't just run the existing scenario suite — re-read each scenario's
+   PASS criteria and ask whether it still says what you now believe is correct.** A scenario that
+   passed yesterday can be passing because it's rewarding the exact behaviour you're trying to
+   remove today (this is precisely what happened above). Update or retag stale scenarios in the
+   same commit as the prompt change, not as a follow-up.
+6. **Keep this section current** — if the framework above changes (a different axis added, a
+   question folded differently, the whole approach replaced), update this section so the next
+   session doesn't have to re-derive it from git history.
+
 ## Status (2026-09-23) — Node 2C triage rewritten as loose/LLM-driven, specialty matching dropped
 
 Requested by the user: Node 2C's classification step (STEP 1/1B/1C/1D/2/3 in the old numbering) was
