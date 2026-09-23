@@ -1,5 +1,59 @@
 # Ryde Health — Practitioner Due / Complaint Intake Integration
 
+## Status (2026-09-23) — Node 2C triage rewritten as loose/LLM-driven, specialty matching dropped
+
+Requested by the user: Node 2C's classification step (STEP 1/1B/1C/1D/2/3 in the old numbering) was
+a rigid, table-driven decision tree -- a hardcoded DOC 1 complaint→category lookup table (80 lines),
+a MUSCULOSKELETAL CATCH-ALL body-region table, and GROUP 1/2/3 modality-menu machinery that forced a
+scripted structural-vs-rehab-vs-systemic question for nearly every complaint. Rewritten so the model
+does the clinical reasoning itself: STEP 1 now just lists the six categories Ryde Health offers and
+gives loose guidance to ask at most one plain-language clarifying question, only when genuinely
+torn between two meaningfully different approaches -- never a scripted mandatory question, never a
+recited modality menu. `git backup: nodes commit dd1e6b94 ("old ryde triage 2c")` holds the exact
+pre-rewrite file plus DOC 1/DOC 2/the old scenarios file, in `backup/2026-09-23/practitioner_due/ryde_health/`.
+
+**Practitioner-specialty matching (DOC 2, STEP 6-PRIME's focus-match reorder) removed per explicit
+instruction ("let's ignore practitioner specialties for now")** -- `doc2_practitioner_constraints.txt`
+is no longer referenced anywhere in the live node. `stored_recommendations[]` is now presented in
+whatever due-rank order the backend returns, unmodified. STEP 6a-3's justification generation (warm,
+complaint-specific, from clinical world knowledge, not from DOC 2 text) is unchanged and still runs
+for every offer, including "who's best" queries -- there is no longer a separate WHO'S-BEST
+pre-check flow (old STEP 1B); a caller who defers the choice to the agent just skips the clarifying
+question and flows through the same pipeline as everyone else.
+
+**Kept unchanged, verbatim: all "tech" that looks at availability and practitioner due-rank** --
+the STEP 5 `smart_voice_agent recommend_availability` tool call, STEP 6/6a/6b response handling and
+slot-band grouping/narrowing, the NEXT AVAILABLE OFFER quick path, STEP 7's fallback sequence
+(next practitioner in the ranked array → widen to an adjacent category → widen the time window →
+`find_next_available`), and STEP 8's confirm-and-handoff. SERVICE ID LOOKUP and the
+PRACTITIONER LOOKUP fuzzy-name table are also unchanged (the latter's per-practitioner "primary
+modality" column is not specialty data -- it's needed to resolve a named practitioner to a service
+ID, and is now also reused as STEP 7's fallback category if that one named person has nothing
+available).
+
+**One correctness fix made in the same pass, not requested but necessary:** the old STEP 1C/1D gave
+a named-practitioner request ("book me with Angelo") its own bespoke availability pre-check outside
+STEP 7's fallback chain. Removing that pre-check (folded into the same generic STEP 1→5→6→7 pipeline
+everyone else uses, per the loose-triage redesign) exposed a latent bug in STEP 7 STAGE 1: it
+assumed `stored_recommendations[]` always has 3+ entries and would try to read a second entry that
+doesn't exist for a single-named-practitioner array. Fixed with a bounds check (STAGE 1 falls
+straight through to STAGE 2 when there's no second entry to advance to), and STAGE 2 now switches
+`approach` from "A" to "B" using that practitioner's own modality (from PRACTITIONER LOOKUP) as the
+fallback category, so a named-practitioner request with nothing available still widens sensibly
+instead of stalling. See scenario "Named practitioner with nothing available widens into their own
+modality" in `node_2c_complaint_intake_scenarios.json`.
+
+Not touched in this pass: `doc1_complaint_mapping.txt` and `doc2_practitioner_constraints.txt` are
+left in place (unreferenced by the live node) rather than deleted, in case specialty-aware matching
+is reintroduced later -- if a future session revisits practitioner specialties, these are the
+starting reference data. Node 1's IMMEDIATE CAPTURE signal into this node, the edges, and the tool
+wiring are all unaffected by this change.
+
+**Verification:** mandatory `.claude/rules/node-edit-verification.md` Haiku self-audit loop run
+against the rewritten prompt (this node is `LLM: claude-haiku-4-5`, `Override: Disabled`) using the
+rewritten scenarios file (12 scenarios, `core`-tagged plus new `loose-triage`/`due-rank-order` tags)
+before patching live -- see the audit result recorded below once it lands this session.
+
 ## Status (2026-09-22) — edge_node2c_service_pivot dead edge fixed and re-deployed
 
 Found via the corrected fleet-wide `tests/test_nodes_expression_edges_uni_router_values_are_producible`

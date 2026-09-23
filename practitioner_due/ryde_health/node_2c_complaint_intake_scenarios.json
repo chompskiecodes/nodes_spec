@@ -1,20 +1,37 @@
 {
-  "_comment": "Tests Ryde Health node 2c complaint intake: MSK complaint triggers style question, ambiguous complaint handled, non-MSK caller handled with out-of-scope response.",
+  "_comment": "Tests Ryde Health node 2c complaint intake (loose, LLM-driven triage redesign, 2026-09-23): confident classification needs no question, genuinely ambiguous complaints get at most one plain-language clarifying question, whole-body/systemic complaints are recognized rather than treated as out of scope, escapes still work, and STEP 7's fallback chain (due-rank order, no more DOC 2 focus-match reorder) still behaves correctly including for a single named practitioner.",
   "scenarios": [
     {
-      "name": "Clear MSK complaint triggers qualifying style question",
+      "name": "Ambiguous MSK complaint gets at most one plain-language clarifying question, never a modality list",
+      "tags": ["core", "loose-triage"],
       "history": [
-        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"},
-        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Just to point you in the right direction, are you after something more hands-on — like joint work and manual therapy to get things moving and reduce the pain directly? Or would you prefer more of a rehab and exercise focus, understanding what's causing it and building strength so it doesn't keep coming back?"}
+        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"}
       ],
-      "expected_behavior": "PASS if the agent's prior response asked the style question (structural vs rehab) without routing or calling any tool. FAIL if the agent called smart_voice_agent before asking the qualifying question, or routed to booking immediately."
+      "expected_behavior": "PASS if the agent's response either (a) asks exactly one clarifying question in plain language describing what two approaches feel like (e.g. hands-on/manual work vs. a rehab-and-exercise approach) without naming clinical modality terms like 'chiropractic' or 'physiotherapy' as a multiple-choice menu, and asks nothing else this turn (no tool call), or (b) if it judges the complaint confidently, moves straight on without asking a clarifying question at all. FAIL if the agent recites the six-category service menu unprompted, asks more than one clarifying question this turn, names clinical modality terms as multiple-choice options, or calls any tool before the complaint has been reasoned about."
     },
     {
-      "name": "Ambiguous complaint with no clear MSK category still extracts complaint and asks style",
+      "name": "Whole-body/systemic complaint is recognized, not treated as out of scope",
+      "tags": ["core", "loose-triage"],
       "history": [
         {"role": "user", "content": "I've just been feeling really run down and achy all over, like my whole body is stiff"}
       ],
-      "expected_behavior": "PASS if agent classifies as whole-body/systemic MSK, sets eligible categories to Physiotherapy, Osteopathy, Acupuncture, and asks a style qualifying question (or needle check if acupuncture is dominant). FAIL if agent says the complaint is out of scope or routes immediately to smart_voice_agent without qualifying."
+      "expected_behavior": "PASS if the agent treats this as a legitimate complaint this clinic can help with (e.g. physiotherapy, osteopathy, or acupuncture are all reasonable fits for a whole-body/systemic presentation) and either asks one plain-language clarifying question or proceeds with its own judgement -- it must not say this is out of scope or that the clinic doesn't treat it, and must not call any tool this turn without first reasoning about the complaint."
+    },
+    {
+      "name": "Confident single fit needs no clarifying question and fires the needle check",
+      "tags": ["core", "loose-triage"],
+      "history": [
+        {"role": "user", "content": "I've been feeling really run down, exhausted, and I can't sleep properly -- I was wondering if acupuncture might help with that"}
+      ],
+      "expected_behavior": "PASS if the agent lands on Chinese Medicine & Acupuncture (the caller already named it, and fatigue/sleep issues don't have a genuinely competing structural-vs-rehab modality at this clinic) and, since acupuncture is now the plan, asks the needle-comfort check as this turn's only spoken output ('acupuncture does involve needles...are you okay with that?' or equivalent). FAIL if the agent asks an unrelated hands-on-vs-rehab clarifying question, skips the needle check entirely, or calls a tool before the needle check has been asked and answered."
+    },
+    {
+      "name": "Caller explicitly defers the choice -- no clarifying question, agent decides",
+      "tags": ["loose-triage"],
+      "history": [
+        {"role": "user", "content": "My knee's been sore since I started running again a few weeks ago -- honestly not sure what I need, whatever you think is best"}
+      ],
+      "expected_behavior": "PASS if the agent does NOT ask a hands-on-vs-rehab (or any other) clarifying question -- since the caller explicitly deferred, the agent should make the category call itself using its own judgement and move on (e.g. proceed toward the timeframe question, or straight to the tool call if timeframe is already known). FAIL if the agent asks the caller to choose between two approaches after they've already said 'whatever you think is best'."
     },
     {
       "name": "Caller pivots to cancel during intake — routes to cancel_intent with a filler phrase",
@@ -62,8 +79,8 @@
       "expected_behavior": "PASS if agent speaks one filler phrase then calls universal_router intent='cancel_intent'. FAIL if agent routes to intent='details' or continues the complaint-intake flow instead of escaping."
     },
     {
-      "name": "STEP 6-PRIME reorder surfaces a true DOC 2 focus match ranked below due_rank 3 (main flow, not a who's-best query)",
-      "tags": ["focus-match-reorder", "core"],
+      "name": "STEP 6 presents due-rank order as returned — no more focus-match reorder",
+      "tags": ["due-rank-order", "core"],
       "history": [
         {"role": "user", "content": "I hurt my knee playing tennis a couple of weeks ago"},
         {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and exercise focus?"},
@@ -71,19 +88,29 @@
         {"role": "assistant", "content": "Do you have a preference for seeing a male or female practitioner, or no preference?"},
         {"role": "user", "content": "No preference. I'd like to come in this week if possible."},
         {"role": "assistant", "content": "Let me just have a look here for you."},
-        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test\", \"recommendations\": [{\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}, {\"practitioner_id\": \"p_mia\", \"practitioner_name\": \"Mia Navratil\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"2:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"2:00 PM\"}}, {\"practitioner_id\": \"p_parinaz\", \"practitioner_name\": \"Parinaz Kheirandish\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 3, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"afternoon\": [\"3:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"3:00 PM\"}}, {\"practitioner_id\": \"p_cat\", \"practitioner_name\": \"Catherine Miller\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 4, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"10:30 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"10:30 AM\"}}], \"first_available\": {\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}"}
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test\", \"recommendations\": [{\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}, {\"practitioner_id\": \"p_mia\", \"practitioner_name\": \"Mia Navratil\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"2:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"2:00 PM\"}}, {\"practitioner_id\": \"p_parinaz\", \"practitioner_name\": \"Parinaz Kheirandish\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 3, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"afternoon\": [\"3:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"3:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}"}
       ],
-      "expected_behavior": "PASS if the agent's next turn presents Catherine Miller (due_rank 4 in the tool result, but the only one of the four whose DOC 2 focus list — 'lower limb injuries, knee and hip' — directly matches the knee complaint) as the recommended practitioner, with her 10:30 AM Wednesday slot, and a justification connecting her modality to the knee complaint. FAIL if the agent presents Alex Donald (due_rank 1) or any practitioner other than Catherine Miller as the first offer, or if it presents Alex Donald's slot/first_available instead of Catherine Miller's — that would mean the reorder was not applied or the agent used the pre-reorder top-level first_available instead of stored_recommendations[0]."
+      "expected_behavior": "PASS if the agent's next turn presents Alex Donald (due_rank 1, first entry in the tool result) with his 9:00 AM Wednesday slot, plus a clinical justification connecting physiotherapy to a knee injury, and a closing question. FAIL if the agent presents Mia Navratil or Parinaz Kheirandish instead of Alex Donald -- there is no reorder step anymore, so the first-ranked entry in the tool result must be what's offered first."
     },
     {
-      "name": "Who's-best query with no DOC 2 focus match among returned candidates falls back to due_rank order, not a false no-availability response",
-      "tags": ["focus-match-reorder"],
+      "name": "Who's-best query presents the top due-rank candidate directly, no specialty exclusion",
+      "tags": ["due-rank-order"],
       "history": [
         {"role": "user", "content": "Who's best for general deconditioning after being sick for a few weeks?"},
         {"role": "assistant", "content": "Let me just have a look here for you."},
         {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test2\", \"recommendations\": [{\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"appointment_type_id\": \"at_pilates_initial\", \"appointment_type\": \"Clinical Pilates Initial\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"8:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}, {\"practitioner_id\": \"p_jordan\", \"practitioner_name\": \"Jordan Suen\", \"appointment_type_id\": \"at_chiro_initial\", \"appointment_type\": \"Chiropractic Initial\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"1:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"1:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}"}
       ],
-      "expected_behavior": "PASS if the agent presents Scott Lyon (due_rank 1 — Scott Lyon's DOC 2 prefer_not is 'purely passive presentations, general deconditioning in non-active patients' which is an exclusion match here, so RULE 1 EXCLUSION should actually remove him and the agent should present Jordan Suen instead, who has no exclusion for this complaint) or otherwise gives a real recommendation with a real time slot and asks a closing question. FAIL if the agent says there is no availability, or refuses to answer the who's-best question, when the tool result clearly contains bookable slots — RULE 4 (no focus match -> due_rank default, not a failure) must produce a real recommendation here, and the RULE 1 exclusion for Scott Lyon must still be honored."
+      "expected_behavior": "PASS if the agent presents Scott Lyon (due_rank 1) with his 8:00 AM Wednesday slot, a real clinical justification connecting Clinical Pilates to general deconditioning, and a closing question -- there is no practitioner-specialty exclusion data anymore, so the top due-rank entry is simply presented. FAIL if the agent says there is no availability, refuses to answer the who's-best question, or presents Jordan Suen instead of Scott Lyon when Scott Lyon has bookable slots."
+    },
+    {
+      "name": "Named practitioner with nothing available widens into their own modality (STEP 7 STAGE 2 fallback)",
+      "tags": ["due-rank-order", "core"],
+      "history": [
+        {"role": "user", "content": "Can I book in with Angelo? My back's been really tight."},
+        {"role": "assistant", "content": "Let me check what Angelo has available for you."},
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test3\", \"recommendations\": [], \"first_available\": null}"}
+      ],
+      "expected_behavior": "PASS if the agent does not error or get stuck -- since Angelo Marketos's only entry (approach 'A', a single practitioner) has nothing available, STEP 7 STAGE 1 must fall straight through (there is no second array entry to advance to) into STAGE 2, which should widen into Angelo's own modality (Chiropractic, per PRACTITIONER LOOKUP) with a spoken transition line, and call smart_voice_agent again with categories instead of practitioners. FAIL if the agent tries to read a second entry from an empty/single-item array, stalls with no further tool call or spoken output, or asks the caller a question unrelated to widening the search."
     }
   ]
 }
