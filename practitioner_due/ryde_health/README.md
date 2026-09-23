@@ -1,5 +1,63 @@
 # Ryde Health — Practitioner Due / Complaint Intake Integration
 
+## Status (2026-09-23, night) — STEP 1 design proposal + safety escalation IMPLEMENTED and patched live
+
+The STEP 1 design proposal below (concrete SKIP CONDITION / PRIMARY QUESTION / FALLBACK QUESTION)
+and the new safety escalation ESCAPE ROUTE (item D below) are both now built into
+`node_2c_complaint_intake.txt` and live on the Ryde Health agent
+(`agent_4001knngjghcfwna069y6jjd6f2v`, node `node_2c_complaint_intake_tmp`).
+
+- **Item E (remaining two categories) resolved without needing to ask** — the live node's own
+  STEP 1 intro already names all six: Physiotherapy, Chiropractic, Osteopathy, Chinese Medicine &
+  Acupuncture, Remedial Massage, Clinical Pilates. The FALLBACK QUESTION wording now explicitly
+  says any of the six can be a live candidate, not only the four used in its example sentences.
+- **Item D (safety escalation) scope decided as "Node 2C only"** — per the instruction that
+  requested this work ("implement the README into ryde n2c"), the escalation is scoped to this
+  node, not the shared system prompt. It is now ESCAPE ROUTE 1 (checked first, ahead of every
+  other escape route and all STEP logic, every turn), using the trigger list proposed below as-is:
+  numbness/weakness, chest pain, loss of bladder/bowel control, unexplained weight loss, fever, or
+  major trauma. Per the doc's own caveat, this list is a starting point, not clinically
+  exhaustive — worth a clinician review pass later, not blocking today.
+- **SKIP CONDITION vs SERVICE PIVOT ESCAPE overlap, addressed:** a caller naming their own category
+  preference while still describing their complaint ("my back hurts, can I see a chiro") now
+  explicitly stays in this node (SKIP CONDITION) rather than risking a false exit to Node 2 via
+  SERVICE PIVOT ESCAPE (which fires only when the caller abandons the complaint framing entirely,
+  e.g. "forget that, just book me a massage") — a disambiguating NOTE was added at the point of use.
+- **Stale `core`-tagged scenario fixed per this doc's own process (rule 3/5 below):** "Straightforward
+  back pain gets a modality explanation, never a soon/timeframe question" was silently certifying
+  STEP 1's clarifying question being skipped for a bare "my back hurts", which is no longer the
+  intended behaviour. Its test input was changed to a complaint with a stated mechanism (a SKIP
+  CONDITION trigger) so it still tests STEP 4's own behaviour without asserting a verdict on STEP
+  1's now-different decision. 6 new scenarios were added covering the PRIMARY/FALLBACK split and
+  the new safety escalation (positive trigger, false-positive regression guard, mid-conversation
+  trigger) — `node_2c_complaint_intake_scenarios.json`, 20 scenarios total.
+- **Verification:** mandatory Haiku self-audit loop (`.claude/rules/node-edit-verification.md`), 2
+  rounds. Round 1: 72/100, all 15 scoped scenario probes PASSED, but 3 concrete stumbling points
+  flagged (SAFETY ESCALATION filler/tool-call muscle-memory bleed from the other 4 escape routes;
+  SKIP CONDITION vs PRIMARY QUESTION precedence when a caller states both a duration and a
+  mechanism in the same breath; FALLBACK QUESTION wording only exemplified for 4 of the 6
+  categories). All 3 fixed in the node text. Round 2: 92/100, all 3 fixes independently confirmed
+  resolved, 3 new targeted probes PASSED, no new stumbling points. Accepted per the verification
+  rule's known-tradeoff clause — the residual gap is inherent real-time wording generation for the
+  FALLBACK question's open-ended category-naming, not a fixable ambiguity.
+- **Deploy mechanism note (bug found and fixed in the same pass):** Node 2C is NOT part of the
+  standard `fast_patch.py`/`batch_patch.py` per-clinic file set (it isn't under
+  `nodes/clinics/ryde_health/`) — it's patched directly via this folder's own
+  `integrate_node2c_ryde.py --from-step 8 --node2c-id node_2c_complaint_intake_tmp` (step 8 =
+  `step_patch_node2c_prompt`, a direct ElevenLabs API PATCH). `parse_node_prompt()` was reading
+  node `.txt` files as `encoding="utf-8"`, which does not strip a UTF-8 BOM — this file (and
+  presumably others written by Windows tooling) has one, so `line.startswith("Node ID:")` never
+  matched and every prompt-patch call hit `ERROR: Could not parse Node ID from ...` immediately.
+  Fixed by switching to `encoding="utf-8-sig"` in `parse_node_prompt()` (the other two `read_text`
+  call sites in this script, `upload_kb_doc` and `step_update_node1_local`, don't crash on a BOM —
+  left as-is, out of scope of this pass). Patched live and verified via a full-text fetch-and-diff
+  against the live agent (not just the script's own first-200-char check): exact byte match,
+  39711 chars.
+- **Not done in this pass, deliberately out of scope:** the safety-escalation trigger list itself
+  was implemented as proposed, not clinically re-derived — see item D's note above. No ElevenLabs
+  test-call credits were spent (per the standing rule) — verification was the local Haiku
+  self-audit loop only.
+
 ## Status (2026-09-23, evening) — live call showed zero triage differentiation; root cause found; design proposal open
 
 Real call, same day as the two rewrites below: caller says "i hurt my back". Node 2C responds
@@ -45,30 +103,57 @@ input chosen for convenience (a bare, information-free complaint) silently also 
 a *different* STEP's decision (whether to ask a clarifying question at all) that the commit never
 intended to test.
 
-**Design proposal for STEP 1 (not yet implemented — see chat for the full writeup and the
-question posed back to the user before building this):** replace the subjective "genuinely torn"
-bar with a concrete signal check, prioritising the axes the user asked for:
+**Design proposal for STEP 1 (revised same session, folding in chat suggestions — still pending
+user sign-off, not yet implemented):** replace the subjective "genuinely torn" bar with a concrete
+signal check, prioritising the axes the user asked for. Two additions below are new since the
+original writeup: an extended skip signal, and a safety escalation branch.
 
+- **Skip condition (extended):** the existing rule ("skip the question entirely whenever the
+  caller's own words already resolve it") now explicitly covers two signal types instead of one:
+  - explicit category preference ("book me a chiro") — existing, kept
+  - a clear mechanism or trauma in the caller's own words (fell, lifted something, twisted it
+    playing sport, car accident) — new; treated as resolving toward physio the same way a stated
+    preference resolves toward the named category, on the reasoning that recent trauma is a
+    stronger fit for an assessment-and-rehab pathway than for a manual adjustment
+  Either signal skips the primary question below entirely.
 - **Primary default question (new):** when the caller has given no duration/history signal at all
   ("since when", "on and off", "tried X before" — none present) and the landed category set has
   2+ real candidates, ask ONE combined question surfacing both acuity and treatment history in one
   breath — e.g. "How long has this been going on, and have you tried anything like physio, chiro,
   or osteo for it before?" A chronic-with-prior-treatment answer often resolves the category choice
   directly (whatever helped before) without needing a second question.
-- **Fallback question (existing, kept, retriggered):** only if the above didn't resolve it (acute,
-  or chronic with nothing tried before) AND the categories still meaningfully differ in approach,
-  ask the existing hands-on-vs-rehab plain-language question — optionally folding in acupuncture
-  ("...or would you be open to trying acupuncture for this?") when it's a real candidate, instead of
-  a third separate question.
-- Still never more than ONE question per turn (existing STEP 1 rule, kept). Still skip entirely
-  whenever the caller's own words already resolve it (existing rule, kept) — this is what keeps it
-  from reintroducing the old DOC-1 "scripted mandatory question on nearly every call" problem: the
-  question is skipped whenever the caller already volunteered the relevant signal, not whenever the
-  model subjectively decides it isn't needed.
+- **Fallback question (existing, kept, retriggered, wording generalised):** only if the primary
+  didn't resolve it (acute, or chronic with nothing tried before) AND the categories still
+  meaningfully differ in approach, ask a plain-language approach question naming whichever
+  categories are actually live for this complaint, rather than a fixed hands-on-vs-rehab-plus-
+  acupuncture template. The current phrasing (hands-on-vs-rehab, optionally folding in acupuncture:
+  "...or would you be open to trying acupuncture for this?") is the right pattern when the landed
+  set is physio/chiro/osteo/acupuncture; it needs to be written so it can name a different pair or
+  triple if the landed set differs (e.g. osteo/chiro/acupuncture with no physio candidate).
+- Still never more than ONE question per turn (existing STEP 1 rule, kept).
+- Still skip entirely whenever the caller's own words already resolve it (existing rule, kept,
+  now covering the wider trigger list above) — this is what keeps it from reintroducing the old
+  DOC-1 "scripted mandatory question on nearly every call" problem: the question is skipped
+  whenever the caller already volunteered the relevant signal, not whenever the model subjectively
+  decides it isn't needed.
+
+**New: safety escalation, ESCAPE ROUTE 2 (not yet drafted into `node_2c_complaint_intake.txt`):**
+none of STEP 1 through STEP 8 currently screens for anything. Proposed addition, same "only fires
+on signal, never scripted" philosophy as the rest of this node, not a dedicated question and not
+gated to STEP 1 specifically: if the caller volunteers any of numbness or weakness, chest pain,
+loss of bladder or bowel control, unexplained weight loss, fever, or a major trauma (car accident,
+fall from height, suspected fracture) anywhere in Node 2C, stop the normal triage/booking flow and
+direct them to urgent GP or emergency care instead of a routine booking. Sits alongside ESCAPE
+ROUTE 1 (appointment lookup delegation), doesn't replace it. Trigger list is a starting point, not
+a clinically exhaustive one; see Open / deferred decision D below.
 
 This changes the *default direction* of STEP 1 (ask unless signalled, vs. today's skip unless
-torn) — a genuine design choice, not a bug fix with one right answer, so it needs the user's
-sign-off on the shape above before it's written into the node and re-audited.
+torn), adds a new signal type to the skip list, generalises the fallback's category wording, and
+adds a net-new escalation path — four genuine design choices, not bug fixes with one right answer,
+so all of it needs the user's sign-off on the shape above before any of it is written into the
+node and re-audited. Per the review process below (rules 3 and 5), the `core`-tagged scenario
+blocking the STEP 1 fix needs to be rewritten in the same pass as whichever of the above gets
+built, not as a follow-up.
 
 ## Triage question design & review process (formalized 2026-09-23, after the above)
 
@@ -417,10 +502,35 @@ Node 1 (see ENTRY: CONTEXT SCAN) and its own captures ride along on universal_ro
 smart_voice_agent payloads per the inherited CONTEXT PIGGYBACK rule.
 
 Node 2C's actual third tool, confirmed live 2026-09-11, is `details_ack`
-(`tool_9301kw12gm3jfecbzq20bpf6kzgw`) — required because this node's ESCAPE ROUTE 1 delegates
-to the shared system prompt's PATIENT APPOINTMENT LOOKUP flow, which needs it. This matches
+(`tool_9301kw12gm3jfecbzq20bpf6kzgw`) — required because this node's CANCEL / RESCHEDULE ESCAPE
+(route 2 as of the 2026-09-23 night safety-escalation renumbering; was route 1 when this note was
+written) delegates to the shared system prompt's PATIENT APPOINTMENT LOOKUP flow, which needs it.
+This matches
 the tool set on every other node in this agent (and fleet-wide) exactly. See "Status
 (2026-09-11)" above for the investigation that confirmed this.
+
+### D. Safety escalation trigger list — RESOLVED 2026-09-23 (night), implemented and live
+
+Built as ESCAPE ROUTE 1 (renumbered to be checked first, ahead of the other four) in
+`node_2c_complaint_intake.txt`, scoped to Node 2C only (not the shared system prompt) per the
+instruction that authorized this build. Trigger list shipped exactly as proposed: numbness or
+weakness, chest pain, loss of bladder or bowel control, unexplained weight loss, fever, or major
+trauma. Not re-derived clinically in this pass — still worth a clinician review of the exact list
+later, per the original caveat, but that review isn't blocking since the route's job (stop and
+redirect to urgent care) is conservative by construction: a false negative (missed trigger)
+behaves exactly as Node 2C did before this change (routine triage), and a false positive just
+sends a caller who didn't need it to a GP/ED referral instead of a booking. Verified via the
+mandatory Haiku self-audit loop (see the 2026-09-23 night status section above) including a
+false-positive regression scenario ("my back's been absolutely killing me").
+
+### E. Ryde Health's remaining two categories — RESOLVED, was already answered in the node itself
+
+Turned out not to need asking: `node_2c_complaint_intake.txt`'s own STEP 1 intro already lists all
+six categories Ryde Health offers (Physiotherapy, Chiropractic, Osteopathy, Chinese Medicine &
+Acupuncture, Remedial Massage, Clinical Pilates) — this README just hadn't named the last two
+(Remedial Massage, Clinical Pilates) anywhere in its own prose. The FALLBACK QUESTION wording was
+generalised to say explicitly that any of the six can be a live candidate, not only the four used
+in its example sentences.
 
 ## Verification before patching
 
@@ -460,3 +570,9 @@ against current code (April 2026):
    patch lands, `caller_complaint` will be silently dropped from the
    complaint_intake payload. Node 2C will then re-extract it from the
    conversation history on entry — should still work but adds a turn.
+5. **Safety escalation trigger list is new and unvalidated**: once ESCAPE ROUTE 2 is built,
+   false negatives (a real red flag that doesn't match the trigger list) are the risk to watch
+   first, since they're the costly failure mode. False positives (escalating a routine complaint
+   that happens to use one of the trigger words loosely, "my back's been killing me") are lower
+   stakes but will affect booking conversion if the wording is too broad. Worth a dedicated
+   scenario batch before this goes live, the same way the rest of Node 2C is audited.

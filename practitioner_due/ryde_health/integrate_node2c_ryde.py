@@ -106,7 +106,7 @@ def fetch_workflow() -> dict:
 
 def parse_node_prompt(path: Path) -> tuple[str, str, bool]:
     """Return (node_id, prompt_text, override_enabled) from a local node txt file."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
     lines = text.splitlines()
     meta = {}
     for line in lines[:10]:
