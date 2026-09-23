@@ -1,0 +1,89 @@
+{
+  "_comment": "Tests Ryde Health node 2c complaint intake: MSK complaint triggers style question, ambiguous complaint handled, non-MSK caller handled with out-of-scope response.",
+  "scenarios": [
+    {
+      "name": "Clear MSK complaint triggers qualifying style question",
+      "history": [
+        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"},
+        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Just to point you in the right direction, are you after something more hands-on — like joint work and manual therapy to get things moving and reduce the pain directly? Or would you prefer more of a rehab and exercise focus, understanding what's causing it and building strength so it doesn't keep coming back?"}
+      ],
+      "expected_behavior": "PASS if the agent's prior response asked the style question (structural vs rehab) without routing or calling any tool. FAIL if the agent called smart_voice_agent before asking the qualifying question, or routed to booking immediately."
+    },
+    {
+      "name": "Ambiguous complaint with no clear MSK category still extracts complaint and asks style",
+      "history": [
+        {"role": "user", "content": "I've just been feeling really run down and achy all over, like my whole body is stiff"}
+      ],
+      "expected_behavior": "PASS if agent classifies as whole-body/systemic MSK, sets eligible categories to Physiotherapy, Osteopathy, Acupuncture, and asks a style qualifying question (or needle check if acupuncture is dominant). FAIL if agent says the complaint is out of scope or routes immediately to smart_voice_agent without qualifying."
+    },
+    {
+      "name": "Caller pivots to cancel during intake — routes to cancel_intent with a filler phrase",
+      "history": [
+        {"role": "user", "content": "My knee has been bothering me after my run last week"},
+        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and strengthening focus?"},
+        {"role": "user", "content": "Actually, never mind — can I cancel my appointment instead?"}
+      ],
+      "expected_behavior": "PASS if agent speaks one filler phrase from the TOOL-CALL FILLER set AND calls universal_router intent='cancel_intent', in the same turn (per the ESCAPE ROUTE OUTPUT FORMAT). FAIL if agent continues the intake flow, asks a qualifying question before routing, omits the filler phrase, or speaks anything beyond the single filler phrase."
+    },
+    {
+      "name": "Plain pricing question during intake routes to PRICING QUERY, not INFO PIVOT",
+      "tags": ["pricing-info-pivot-carveout", "core"],
+      "history": [
+        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"},
+        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on — joint work and manual therapy to get things moving and reduce the pain directly? Or more of a rehab and exercise focus, understanding what's causing it and building strength so it doesn't keep coming back?"},
+        {"role": "user", "content": "Actually, before I decide — how much does a physio session cost?"}
+      ],
+      "expected_behavior": "PASS if agent speaks one filler phrase from the TOOL-CALL FILLER set and calls universal_router intent='get_service_price' (the system prompt's PRICING QUERY path — stays in this node, does not eject to info_pivot). FAIL if agent calls universal_router intent='info_pivot' for a plain, uncombined pricing question."
+    },
+    {
+      "name": "Combined price+duration question still routes to INFO PIVOT (regression guard)",
+      "tags": ["pricing-info-pivot-carveout"],
+      "history": [
+        {"role": "user", "content": "How much does a physio session cost and how long does it run?"}
+      ],
+      "expected_behavior": "PASS if agent speaks one filler phrase and calls universal_router intent='info_pivot' (system prompt's COMBINED ASK SCOPED EXCEPTION routes same-turn price+duration asks to info_pivot/Node 8). FAIL if agent calls get_service_price directly for this combined ask, or fails to call any tool."
+    },
+    {
+      "name": "Caller only wants to check an existing appointment — routes to details, not cancel_intent",
+      "tags": ["cancel-check-carveout", "core"],
+      "history": [
+        {"role": "user", "content": "Hi, can you just check what time my appointment is for on Thursday?"}
+      ],
+      "expected_behavior": "PASS if agent says \"Checking that now, one moment.\" and calls universal_router intent='details' (system prompt's PATIENT APPOINTMENT LOOKUP, PHASE A). FAIL if agent calls universal_router intent='cancel_intent' for a pure check/confirm request with no cancel or reschedule language."
+    },
+    {
+      "name": "Genuine cancel request still routes to cancel_intent (regression guard)",
+      "tags": ["cancel-check-carveout"],
+      "history": [
+        {"role": "user", "content": "I've been getting shoulder pain from gardening"},
+        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and strengthening focus?"},
+        {"role": "user", "content": "Actually, forget it — I need to cancel my appointment for Friday instead"}
+      ],
+      "expected_behavior": "PASS if agent speaks one filler phrase then calls universal_router intent='cancel_intent'. FAIL if agent routes to intent='details' or continues the complaint-intake flow instead of escaping."
+    },
+    {
+      "name": "STEP 6-PRIME reorder surfaces a true DOC 2 focus match ranked below due_rank 3 (main flow, not a who's-best query)",
+      "tags": ["focus-match-reorder", "core"],
+      "history": [
+        {"role": "user", "content": "I hurt my knee playing tennis a couple of weeks ago"},
+        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and exercise focus?"},
+        {"role": "user", "content": "Definitely the rehab and exercise side, I want to build it back up properly"},
+        {"role": "assistant", "content": "Do you have a preference for seeing a male or female practitioner, or no preference?"},
+        {"role": "user", "content": "No preference. I'd like to come in this week if possible."},
+        {"role": "assistant", "content": "Let me just have a look here for you."},
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test\", \"recommendations\": [{\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}, {\"practitioner_id\": \"p_mia\", \"practitioner_name\": \"Mia Navratil\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"2:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"2:00 PM\"}}, {\"practitioner_id\": \"p_parinaz\", \"practitioner_name\": \"Parinaz Kheirandish\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 3, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"afternoon\": [\"3:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"3:00 PM\"}}, {\"practitioner_id\": \"p_cat\", \"practitioner_name\": \"Catherine Miller\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 4, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"10:30 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"10:30 AM\"}}], \"first_available\": {\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}"}
+      ],
+      "expected_behavior": "PASS if the agent's next turn presents Catherine Miller (due_rank 4 in the tool result, but the only one of the four whose DOC 2 focus list — 'lower limb injuries, knee and hip' — directly matches the knee complaint) as the recommended practitioner, with her 10:30 AM Wednesday slot, and a justification connecting her modality to the knee complaint. FAIL if the agent presents Alex Donald (due_rank 1) or any practitioner other than Catherine Miller as the first offer, or if it presents Alex Donald's slot/first_available instead of Catherine Miller's — that would mean the reorder was not applied or the agent used the pre-reorder top-level first_available instead of stored_recommendations[0]."
+    },
+    {
+      "name": "Who's-best query with no DOC 2 focus match among returned candidates falls back to due_rank order, not a false no-availability response",
+      "tags": ["focus-match-reorder"],
+      "history": [
+        {"role": "user", "content": "Who's best for general deconditioning after being sick for a few weeks?"},
+        {"role": "assistant", "content": "Let me just have a look here for you."},
+        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test2\", \"recommendations\": [{\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"appointment_type_id\": \"at_pilates_initial\", \"appointment_type\": \"Clinical Pilates Initial\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"8:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}, {\"practitioner_id\": \"p_jordan\", \"practitioner_name\": \"Jordan Suen\", \"appointment_type_id\": \"at_chiro_initial\", \"appointment_type\": \"Chiropractic Initial\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"1:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"1:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}"}
+      ],
+      "expected_behavior": "PASS if the agent presents Scott Lyon (due_rank 1 — Scott Lyon's DOC 2 prefer_not is 'purely passive presentations, general deconditioning in non-active patients' which is an exclusion match here, so RULE 1 EXCLUSION should actually remove him and the agent should present Jordan Suen instead, who has no exclusion for this complaint) or otherwise gives a real recommendation with a real time slot and asks a closing question. FAIL if the agent says there is no availability, or refuses to answer the who's-best question, when the tool result clearly contains bookable slots — RULE 4 (no focus match -> due_rank default, not a failure) must produce a real recommendation here, and the RULE 1 exclusion for Scott Lyon must still be honored."
+    }
+  ]
+}
