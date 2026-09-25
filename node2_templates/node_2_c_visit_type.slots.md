@@ -486,7 +486,7 @@ NOT_OFFERED (first):  "We don't offer [term] here -- we have Physiotherapy, Exer
 NOT_OFFERED (second): "We don't have [term] either. Did you want to book one of our available services?"
 LOCATION_QUESTION (self):  "Which location would you like to come to? We have South Morang, or two locations in Epping -- Group One Medical on Edgars Road, or O'Herns Road Medical Centre on Manor House Drive."
 LOCATION_QUESTION (other): "Which location would they like to come to? We have South Morang, or two locations in Epping -- Group One Medical on Edgars Road, or O'Herns Road Medical Centre on Manor House Drive."
-INSURER_QUESTION: "Which provider -- Cogent, DVA, EPC or Medicare, Max Health, NDIS, TAC, or WorkCover?"
+INSURER_QUESTION: "Which provider -- private health, Cogent, DVA, EPC or Medicare, Max Health, NDIS, TAC, or WorkCover?"
 ```
 
 ### `SERVICE_DETECTION_BLOCK`
