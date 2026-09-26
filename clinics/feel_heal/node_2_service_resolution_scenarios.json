@@ -1,5 +1,5 @@
 {
-  "_comment": "Category min-duration availability feasibility check added 2026-09-26 (docs/category-min-duration-availability-design.md §8, feel & heal pilot). Covers: the check fires only when a category-availability question arrives BEFORE any tier/add-on/duration is stated; a fully-specified booking in the same breath skips it entirely; found=false declines gracefully without continuing to narrow; found=true continues into the normal narrowing questions.",
+  "_comment": "Category min-duration availability feasibility check added 2026-09-26 (docs/category-min-duration-availability-design.md §8, feel & heal pilot). Covers: the check fires only when a category-availability question arrives BEFORE any tier/add-on/duration is stated; a fully-specified booking in the same breath skips it entirely; found=false offers escape routes (different day / the other treatment) before falling to a message, never continuing to narrow the declined treatment; found=true continues into the normal narrowing questions; check_failed=true (a lookup problem, not a real answer) is handled silently by falling through to normal narrowing with zero mention of availability. Revised 2026-09-26 after an adversarial review found the original found=false scenario's PASS wording ('closely matching the tool's message') would also pass a violation of the node's own 'never speak message verbatim' rule, and mocked a message value production never actually returns for that path (the real backend returns no message key at all when a category search finds zero practitioners).",
   "scenarios": [
     {
       "name": "Category + availability question, nothing else stated — check fires before any narrowing",
@@ -18,13 +18,13 @@
       "tags": ["core", "category-feasibility-check"]
     },
     {
-      "name": "Feasibility check returns found=false — decline gracefully, never continue narrowing",
+      "name": "Feasibility check returns found=false — offer a different day or the other treatment before falling to a message",
       "history": [
         {"role": "user", "content": "Do you have anything for a relaxation massage this week?"},
         {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"Relaxation or Classic Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"\", \"message\": \"Nothing available for that this week, I'm afraid.\"}"}
+        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"Relaxation or Classic Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"\", \"check_failed\": \"\"}"}
       ],
-      "expected_behavior": "PASS if agent tells the caller plainly that nothing is available (using or closely matching the tool's message) and then offers to pass a message to the clinic for follow-up. FAIL if agent asks about tier, add-ons, or duration for Relaxation/Classic Massage after being told there's no room, or if agent claims availability exists.",
+      "expected_behavior": "PASS if agent tells the caller, in its OWN words (the tool result has no message field on this path — there is nothing to recite even accidentally), that there's no room today, then offers to check a different day or see if Remedial Massage has room instead — NOT a direct jump to 'I can pass this on to the clinic'. FAIL if agent asks about tier, add-ons, or duration for Relaxation/Classic Massage after being told there's no room, claims availability exists, invents a specific message-field-sounding phrase, or skips straight to the leave-a-message offer without mentioning either escape route first.",
       "tags": ["core", "category-feasibility-check"]
     },
     {
@@ -32,10 +32,20 @@
       "history": [
         {"role": "user", "content": "Does anyone have room for a remedial massage today?"},
         {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"true\", \"category_resolved\": \"Remedial Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"true\", \"message\": \"Yes, there's room for that today.\"}"}
+        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"true\", \"category_resolved\": \"Remedial Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"true\", \"check_failed\": \"\", \"message\": \"Yes, there's room for that today.\"}"}
       ],
-      "expected_behavior": "PASS if agent briefly acknowledges availability (something like 'Good news, we do have room today') and then asks the ADD-ON QUESTION ('Would you like Dry Needling, Cupping, or a Salt Scrub added to that, or just the massage on its own?') since no add-on/tier/duration has been stated yet. FAIL if agent calls confirm_service directly without asking the still-unresolved add-on question, or re-runs category_availability_check again this turn.",
+      "expected_behavior": "PASS if agent briefly acknowledges availability in its own words (something like 'Good news, we do have room today', never reciting the message field verbatim) and then asks the ADD-ON QUESTION ('Would you like Dry Needling, Cupping, or a Salt Scrub added to that, or just the massage on its own?') since no add-on/tier/duration has been stated yet. FAIL if agent calls confirm_service directly without asking the still-unresolved add-on question, re-runs category_availability_check again this turn, or speaks the message field's exact wording.",
       "tags": ["core", "category-feasibility-check"]
+    },
+    {
+      "name": "Feasibility check returns check_failed=true — say nothing about availability, fall through to normal narrowing silently",
+      "history": [
+        {"role": "user", "content": "Does anyone have room for a remedial massage today?"},
+        {"role": "assistant", "content": "One moment."},
+        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"\", \"category_min_duration_minutes\": \"\", \"exact_appointment_type_pending\": \"\", \"check_failed\": \"true\", \"message\": \"I wasn't able to check that right now — let me try the usual way instead.\"}"}
+      ],
+      "expected_behavior": "PASS if agent says NOTHING about availability one way or the other (no 'there's no room', no 'good news') and instead proceeds directly with the next unresolved HOW TO NARROW IT DOWN question for Remedial Massage — the ADD-ON QUESTION. FAIL if agent tells the caller there's no availability, recites the tool's message field, or offers the different-day/other-treatment escape routes (those are only for a genuine found=false result, not a check failure).",
+      "tags": ["core", "category-feasibility-check", "check-failed"]
     }
   ]
 }
