@@ -1,145 +1,64 @@
-{
-  "_comment": "Category min-duration availability feasibility check added 2026-09-26 (docs/category-min-duration-availability-design.md §8, feel & heal pilot). Covers: the check fires only when a category-availability question arrives BEFORE any tier/add-on/duration is stated; a fully-specified booking in the same breath skips it entirely; found=false offers escape routes (different day / the other treatment) before falling to a message, never continuing to narrow the declined treatment; found=true continues into the normal narrowing questions; check_failed=true (a lookup problem, not a real answer) is handled silently by falling through to normal narrowing with zero mention of availability. Revised 2026-09-26 after an adversarial review found the original found=false scenario's PASS wording ('closely matching the tool's message') would also pass a violation of the node's own 'never speak message verbatim' rule, and mocked a message value production never actually returns for that path (the real backend returns no message key at all when a category search finds zero practitioners).",
-  "scenarios": [
-    {
-      "name": "Category + availability question, nothing else stated — check fires before any narrowing",
-      "history": [
-        {"role": "user", "content": "Does anyone have space for a remedial massage today?"}
-      ],
-      "expected_behavior": "PASS if agent speaks exactly one filler phrase (e.g. 'One moment.') then calls universal_router intent='category_availability_check' with payload service_category='remedial_massage', with zero other questions asked first (no add-on question, no tier question, no duration question). FAIL if agent asks about add-ons/tier/duration before checking, or calls confirm_service directly, or calls any tool other than universal_router.",
-      "tags": ["core", "category-feasibility-check"]
-    },
-    {
-      "name": "Category named WITH tier/duration already stated — skip the check entirely, narrow normally",
-      "history": [
-        {"role": "user", "content": "I'd like a remedial massage with Gene, 60 minutes."}
-      ],
-      "expected_behavior": "PASS if agent does NOT call category_availability_check at all (the caller has already fully specified tier via naming Gene and duration via '60 minutes', so this is a normal booking, not a feasibility question) — agent should proceed toward confirm_service (may ask about add-ons first, per the ADD-ON QUESTION rule, since that wasn't stated). FAIL if agent calls universal_router intent='category_availability_check'.",
-      "tags": ["core", "category-feasibility-check"]
-    },
-    {
-      "name": "Feasibility check returns found=false — offer a different day or the other treatment before falling to a message",
-      "history": [
-        {"role": "user", "content": "Do you have anything for a relaxation massage this week?"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"Relaxation or Classic Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"\", \"check_failed\": \"\"}"}
-      ],
-      "expected_behavior": "PASS if agent tells the caller, in its OWN words (the tool result has no message field on this path — there is nothing to recite even accidentally), that there's no room today, then offers to check a different day or see if Remedial Massage has room instead — NOT a direct jump to 'I can pass this on to the clinic'. FAIL if agent asks about tier, add-ons, or duration for Relaxation/Classic Massage after being told there's no room, claims availability exists, invents a specific message-field-sounding phrase, or skips straight to the leave-a-message offer without mentioning either escape route first. Also FAIL if the agent says there's no room 'this week' (or any span wider than today) — the check only looked at today.",
-      "tags": ["core", "category-feasibility-check"]
-    },
-    {
-      "name": "Feasibility check returns found=true — acknowledge briefly, then continue normal narrowing",
-      "history": [
-        {"role": "user", "content": "Does anyone have room for a remedial massage today?"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"true\", \"category_resolved\": \"Remedial Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"true\", \"check_failed\": \"\", \"message\": \"Yes, there's room for that today.\"}"}
-      ],
-      "expected_behavior": "PASS if agent briefly acknowledges availability in its own words (something like 'Good news, we do have room today', never reciting the message field verbatim) and then asks the ADD-ON QUESTION ('Would you like Dry Needling, Cupping, or a Salt Scrub added to that, or just the massage on its own?') since no add-on/tier/duration has been stated yet. FAIL if agent calls confirm_service directly without asking the still-unresolved add-on question, re-runs category_availability_check again this turn, or speaks the message field's exact wording.",
-      "tags": ["core", "category-feasibility-check"]
-    },
-    {
-      "name": "Feasibility check returns check_failed=true — say nothing about availability, fall through to normal narrowing silently",
-      "history": [
-        {"role": "user", "content": "Does anyone have room for a remedial massage today?"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"\", \"category_min_duration_minutes\": \"\", \"exact_appointment_type_pending\": \"\", \"check_failed\": \"true\", \"message\": \"I wasn't able to check that right now — let me try the usual way instead.\"}"}
-      ],
-      "expected_behavior": "PASS if agent says NOTHING about availability one way or the other (no 'there's no room', no 'good news') and instead proceeds directly with the next unresolved HOW TO NARROW IT DOWN question for Remedial Massage — the ADD-ON QUESTION. FAIL if agent tells the caller there's no availability, recites the tool's message field, or offers the different-day/other-treatment escape routes (those are only for a genuine found=false result, not a check failure).",
-      "tags": ["core", "category-feasibility-check", "check-failed"]
-    },
-    {
-      "name": "Caller states a length in the same breath — check STILL fires, with requested_duration_minutes included (conv_1801m3bgv9b1fga9rr38mq7aa5ct regression)",
-      "history": [
-        {"role": "user", "content": "I was wondering if you had any times this afternoon around five o'clock for a one-hour remedial massage."}
-      ],
-      "expected_behavior": "PASS if agent speaks exactly one filler phrase then calls universal_router intent='category_availability_check' with payload service_category='remedial_massage' AND requested_duration_minutes=60 (a plain integer, from 'one-hour') — with zero other questions asked first. FAIL if agent skips the check and goes straight to the ADD-ON QUESTION (the pre-fix regression: a stated length used to wrongly disqualify this check), omits requested_duration_minutes, sends a non-numeric value for it, or asks about tier/add-on/duration before checking.",
-      "tags": ["core", "category-feasibility-check", "duration-and-practitioner-naming"]
-    },
-    {
-      "name": "Feasibility check returns found=true with available_practitioner_names — speak the names, not the message field, then continue narrowing",
-      "history": [
-        {"role": "user", "content": "I was wondering if you had any times this afternoon around five o'clock for a one-hour remedial massage."},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"true\", \"category_resolved\": \"Remedial Massage\", \"category_min_duration_minutes\": \"75\", \"exact_appointment_type_pending\": \"true\", \"check_failed\": \"\", \"available_practitioner_names\": \"Bank and Gene\", \"message\": \"Yes, there is room today.\"}"}
-      ],
-      "expected_behavior": "PASS if agent's spoken reply names Bank and Gene specifically as who has room (using the available_practitioner_names value as-is, not inventing other names or dropping one of the two), names the DAY only (today) with the one-hour length — never claiming room 'this afternoon' or 'around five', since the check covered the whole day — then asks the ADD-ON QUESTION next. FAIL if agent says they have room this afternoon / at or around five, gives a generic 'we have room' with no names, invents a practitioner not in the list, recites the message field's exact wording, or calls confirm_service directly without asking the still-unresolved add-on question.",
-      "tags": ["core", "category-feasibility-check", "day-only-claim", "duration-and-practitioner-naming"]
-    },
-    {
-      "name": "Feasibility check returns found=false — offer a different day, the other treatment, OR Ning (not just the first two)",
-      "history": [
-        {"role": "user", "content": "Does anyone have room for a remedial massage this afternoon?"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"Remedial Massage\", \"category_min_duration_minutes\": \"45\", \"exact_appointment_type_pending\": \"\", \"check_failed\": \"\"}"}
-      ],
-      "expected_behavior": "PASS if agent's offer includes THREE options — a different day, the other treatment (Relaxation/Classic Massage), and checking with Ning (our premium therapist) — not just the first two. FAIL if Ning is omitted from the offer, or if the agent implies the found=false result already covered Ning (it never does — this check never searches her).",
-      "tags": ["core", "category-feasibility-check", "duration-and-practitioner-naming"]
-    },
-    {
-      "name": "Stated length the category doesn't offer comes back check_failed — say nothing about room, narrow normally",
-      "history": [
-        {"role": "user", "content": "Hi, is anyone free today for a three-hour remedial massage?"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"\", \"category_min_duration_minutes\": \"\", \"exact_appointment_type_pending\": \"\", \"available_practitioner_names\": \"\", \"check_failed\": \"true\", \"message\": \"No 180-minute option in this category to check.\"}"}
-      ],
-      "expected_behavior": "PASS if agent says nothing about whether anyone has room (neither yes nor no), does not read the message field aloud, and asks the ADD-ON QUESTION (Dry Needling, Cupping, or a Salt Scrub, or on its own) as the next step. FAIL if agent tells the caller there is no room, claims room, says 'no 180-minute option', or makes any tool call this turn.",
-      "tags": ["category-feasibility-check", "check-failed", "day-only-claim"]
-    },
-    {
-      "name": "found=false for a named day — say there's no room on THAT day, not today",
-      "history": [
-        {"role": "user", "content": "Does anyone have room for a relaxation massage on Thursday?"},
-        {"role": "assistant", "content": "One moment."},
-        {"role": "system", "content": "{\"status\": \"success\", \"intent\": \"category_availability_check\", \"uni_router_intent\": \"category_availability_checked\", \"found\": \"false\", \"category_resolved\": \"Relaxation or Classic Massage\", \"category_min_duration_minutes\": \"60\", \"exact_appointment_type_pending\": \"\", \"available_practitioner_names\": \"\", \"check_failed\": \"\", \"message\": \"internal\"}"}
-      ],
-      "expected_behavior": "PASS if agent says there's no room on Thursday (not 'today') with the standard therapists and offers a different day, Remedial Massage instead, or Ning. FAIL if agent says 'today', names Aek, or skips the offer.",
-      "tags": ["category-feasibility-check", "day-only-claim"]
-    },
-    {
-      "name": "Therapist named in the OPENING message, several turns later reaching the tier question — must be skipped (conv_2201m3hj5e89ek7r9qrxjz307m1d regression)",
-      "history": [
-        {"role": "user", "content": "I would like to have a massage for tomorrow, one hour. Is Ning working tomorrow?"},
-        {"role": "assistant", "content": "Before I check Ning's availability, I need to know which type of massage you'd like — would you prefer Remedial Massage, Relaxation or Classic Massage, or something else?"},
-        {"role": "user", "content": "Just a normal massage, whatever's fine."},
-        {"role": "assistant", "content": "Sounds like you're after a relaxing, unwinding massage rather than deep tissue work — so that would be our Relaxation or Classic Massage. Does that sound right?"},
-        {"role": "user", "content": "Yes, that's right."}
-      ],
-      "expected_behavior": "PASS if the agent does NOT ask 'would you like to see our standard therapists, or Ning' — the caller already named Ning by name in their very first message, several turns back, which already answers the tier question. The agent should proceed straight to whatever is still unresolved for a one-hour Relaxation/Classic Massage with Ning (duration was also already given as 'one hour', so this should move toward confirming and handing off, or at most a brief confirmation naming Ning and one hour). FAIL if the agent asks the standard-or-premium/Ning tier question again, treating the opening mention as if it had never been said.",
-      "tags": ["core", "therapist-named-early-tier-skip"]
-    },
-    {
-      "name": "Standard therapist named in the OPENING message, tier question must stay skipped after treatment-type narrowing",
-      "history": [
-        {"role": "user", "content": "Hi, can I get in with Gene sometime tomorrow, maybe an hour?"},
-        {"role": "assistant", "content": "Sure, before I check Gene's availability — what type of massage are you after, remedial or relaxation/classic?"},
-        {"role": "user", "content": "The deep tissue one, my back is really tight."}
-      ],
-      "expected_behavior": "PASS if the agent does NOT ask the standard-or-premium/Ning tier question at all — Gene was already named in the caller's very first message, which already settles the tier as standard. The agent should instead ask the ADD-ON QUESTION for Remedial Massage (Dry Needling, Cupping, Salt Scrub, or on its own), since that has not been resolved yet. FAIL if the agent asks 'would you like to see our standard therapists, or Ning' or any variant of the tier question.",
-      "tags": ["core", "therapist-named-early-tier-skip"]
-    },
-    {
-      "name": "Mangled therapist name in the OPENING message, several narrowing turns later — tier question must stay skipped",
-      "history": [
-        {"role": "user", "content": "Hey, is Jean working this week? I wanted to book a massage."},
-        {"role": "assistant", "content": "Before I check her availability — what type of massage are you after, remedial or relaxation/classic?"},
-        {"role": "user", "content": "Um, just a normal one, nothing too deep."},
-        {"role": "assistant", "content": "Sounds like Relaxation or Classic Massage then — does that sound right?"},
-        {"role": "user", "content": "Yeah."},
-        {"role": "assistant", "content": "Great, and how long were you after — 45, 60, 75, 90 or 120 minutes?"},
-        {"role": "user", "content": "60 minutes please."}
-      ],
-      "expected_behavior": "PASS if the agent does NOT ask the standard-or-premium/Ning tier question — 'Jean' is a generous match for Gene, named in the very first message, which already settles the tier as standard. All narrowing is now complete (treatment, tier via Gene, duration), so the agent should move toward confirming and handing off with confirm_service. FAIL if the agent asks the tier question, or fails to recognize 'Jean' as Gene.",
-      "tags": ["core", "therapist-named-early-tier-skip"]
-    },
-    {
-      "name": "Therapist named as a QUESTION in the opening message (not a direct request) — still counts, tier question must be skipped",
-      "history": [
-        {"role": "user", "content": "Does Bank have anything free on Friday? I need a massage."},
-        {"role": "assistant", "content": "Let me check for you — what type of massage were you after, remedial or relaxation/classic?"},
-        {"role": "user", "content": "Remedial, my shoulders are so tight."}
-      ],
-      "expected_behavior": "PASS if the agent does NOT ask the standard-or-premium/Ning tier question — 'Does Bank have anything free' names Bank just as firmly as a direct request would, even though it's phrased as a question, settling the tier as standard. The agent should ask the ADD-ON QUESTION for Remedial Massage next. FAIL if the agent asks the tier question, treating the question-phrased mention as not having named a therapist.",
-      "tags": ["core", "therapist-named-early-tier-skip"]
-    }
-  ]
-}
+[
+  {
+    "name": "pooled_check_fires_no_length",
+    "tags": ["core", "category-availability-check"],
+    "history": [
+      {"role": "CALLER", "text": "Hi, does anyone have room for a remedial massage today?"}
+    ],
+    "expected_behavior": "Fires the availability check: brief filler, then universal_router intent=category_availability_check, payload service_category=\"remedial_massage\", no practitioner_name, no requested_duration_minutes (no length was stated)."
+  },
+  {
+    "name": "pooled_check_fires_with_length",
+    "tags": ["core", "category-availability-check"],
+    "history": [
+      {"role": "CALLER", "text": "I was wondering if you had any times this afternoon around five o'clock for a one-hour remedial massage."}
+    ],
+    "expected_behavior": "Fires the availability check with service_category=\"remedial_massage\" and requested_duration_minutes=60, no practitioner_name (no therapist named)."
+  },
+  {
+    "name": "named_therapist_disqualifies_bank_gene",
+    "tags": ["core", "category-availability-check"],
+    "history": [
+      {"role": "CALLER", "text": "I'd like a remedial massage with Gene, 60 minutes."}
+    ],
+    "expected_behavior": "Does NOT fire the availability check. Naming Gene settles standard tier — goes straight to the ADD-ON QUESTION (Dry Needling, Cupping, or Salt Scrub, or on its own), since no add-on was mentioned. No universal_router call yet."
+  },
+  {
+    "name": "ning_named_check_fires_scoped",
+    "tags": ["core", "practitioner-scoped-check"],
+    "history": [
+      {"role": "CALLER", "text": "Is Ning working tomorrow for a one-hour remedial massage?"}
+    ],
+    "expected_behavior": "Fires the availability check (Ning naming this way does NOT disqualify it — a question phrasing still counts as naming her): brief filler, then universal_router intent=category_availability_check, payload service_category=\"remedial_massage\", requested_duration_minutes=60, practitioner_name=\"Ning\"."
+  },
+  {
+    "name": "ning_check_found_true_skips_tier_question",
+    "tags": ["practitioner-scoped-check"],
+    "history": [
+      {"role": "CALLER", "text": "Is Ning working tomorrow for a one-hour remedial massage?"},
+      {"role": "AGENT", "text": "One moment."},
+      {"role": "SYSTEM (tool result)", "text": "{\"status\": \"success\", \"check_failed\": \"\", \"found\": \"true\", \"category_resolved\": \"Remedial Massage\", \"available_practitioner_names\": \"Ning\", \"exact_appointment_type_pending\": \"true\"}"}
+    ],
+    "expected_behavior": "Speaks that Ning has room tomorrow for a one-hour remedial massage, using \"Ning\" from available_practitioner_names as-is. Does NOT ask the standard-or-premium tier question (already settled — Ning is premium). Asks the ADD-ON QUESTION next (Dry Needling, Cupping, Salt Scrub, or on its own) since that's still unresolved for Remedial Massage."
+  },
+  {
+    "name": "ning_check_found_false_offers_correct_escapes",
+    "tags": ["practitioner-scoped-check"],
+    "history": [
+      {"role": "CALLER", "text": "Is Ning working tomorrow for a one-hour remedial massage?"},
+      {"role": "AGENT", "text": "One moment."},
+      {"role": "SYSTEM (tool result)", "text": "{\"status\": \"success\", \"check_failed\": \"\", \"found\": \"false\", \"category_resolved\": \"Remedial Massage\"}"}
+    ],
+    "expected_behavior": "Tells the caller plainly that Ning doesn't have room tomorrow for that. Offers checking a different day, checking with the OTHER (standard) therapists instead, or checking the other treatment (Relaxation/Classic Massage) with Ning — does NOT re-offer \"check with Ning\" (that's who was just checked)."
+  },
+  {
+    "name": "pooled_check_found_false_offers_ning",
+    "tags": ["core", "category-availability-check"],
+    "history": [
+      {"role": "CALLER", "text": "Does anyone have room for a remedial massage today?"},
+      {"role": "AGENT", "text": "One moment."},
+      {"role": "SYSTEM (tool result)", "text": "{\"status\": \"success\", \"check_failed\": \"\", \"found\": \"false\", \"category_resolved\": \"Remedial Massage\"}"}
+    ],
+    "expected_behavior": "Tells the caller plainly the standard therapists have no room today. Offers a different day, the other treatment, or checking with Ning (premium therapist). If the caller picks Ning, the next turn should re-run the check with practitioner_name=\"Ning\" added, not silently assume an answer about her."
+  }
+]
