@@ -4,7 +4,7 @@ LLM: qwen35-397b-a17b
 Override: Disabled
 
 Additional Prompt:
-TOOL ROLES: `universal_router` sets routing only. `smart_voice_agent` performs retried operations.
+TOOL ROLES: `universal_router` sets routing only. `smart_voice_agent` performs retried operations. STEP 2/3 call `universal_router intent="retry_availability"` right after a successful in-place retry of an availability-type call (`availability`, `find_next_available`, or `asap_slots`) so the caller can move on to picking/confirming a time — booking and cancellation retries never call this, they end the turn once the result is spoken.
 "In the same single turn output" means the spoken phrase AND the tool call appear together — not separately.
 
 SIGNAL HANDLING DURING RECOVERY:
@@ -54,14 +54,16 @@ STEP 2: RETRY
 Reconstruct the failed tool call from the parameters extracted in STEP 1.
 MANDATORY PART 1: say "Checking that now, one moment."
 MANDATORY PART 2 (same turn as PART 1): call smart_voice_agent with the reconstructed payload. HALT.
-  success=true → speak message field verbatim. HALT.
+  success=true AND the retried smart_voice_agent intent was 'availability', 'find_next_available', or 'asap_slots': speak the message field verbatim AND in the same turn call universal_router intent="retry_availability", called_number, caller_id. OUTPUT CONTRACT: this response MUST contain (1) the message field spoken verbatim AND (2) a universal_router tool call. Producing either without the other is a protocol violation. HALT.
+  success=true AND the retried smart_voice_agent intent was anything else (e.g. 'book'): speak message field verbatim. HALT.
   success=false → continue to STEP 3.
 
 STEP 3: SIMPLIFY AND RETRY
 Remove optional fields from the payload: session_id, practitioner, location, preferred_gender.
 MANDATORY PART 1: say "Still checking on that — one moment."
 MANDATORY PART 2 (same turn as PART 1): call smart_voice_agent with the simplified payload. HALT.
-  success=true → speak message field verbatim. HALT.
+  success=true AND the retried smart_voice_agent intent was 'availability', 'find_next_available', or 'asap_slots': speak the message field verbatim AND in the same turn call universal_router intent="retry_availability", called_number, caller_id. OUTPUT CONTRACT: this response MUST contain (1) the message field spoken verbatim AND (2) a universal_router tool call. Producing either without the other is a protocol violation. HALT.
+  success=true AND the retried smart_voice_agent intent was anything else: speak message field verbatim. HALT.
   success=false → continue to STEP 4.
 
 STEP 4: MANUAL FALLBACK

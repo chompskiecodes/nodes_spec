@@ -18,7 +18,7 @@ Restores exactly the edge set documented in node_2c_complaint_intake.txt's heade
                                              BWD: info_answered AND caller_complaint != "none"
   edge_node2c_wrap_up           N2C -> N9   FWD: wrap_up
   edge_node2c_error_recovery    N2C -> N11  FWD: LLM (smart_voice_agent unrecoverable failure)
-                                             BWD: LLM (smart_voice_agent retry possible)
+                                             BWD: none (Node 11 returns via retry_availability)
 
 Also re-applies the accompanying Node 2 -> Node 8 backward-condition tightening (documented in
 the same file's Note) so a caller who arrived via 2C and pivots through Node 8 returns to 2C
@@ -144,11 +144,9 @@ NEW_EDGES: dict[str, dict] = {
             "(system failures, database errors, or unexpected responses that cannot be handled "
             "within this node), originating_node was Complaint_Intake",
         ),
-        "backward_condition": _llm(
-            "11→2C. Retry Availability",
-            "smart_voice_agent tool with intent='availability' failed but retry is possible with "
-            "alternate parameters or simplified payload, originating_node was Complaint_Intake",
-        ),
+        # No backward return: an LLM backward condition oscillates, and Node 11 now returns to
+        # the main Node 3 via uni_router_intent=="retry_availability" (scripts/fix_node11_edges.py).
+        "backward_condition": None,
     },
 }
 
