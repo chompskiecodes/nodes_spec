@@ -116,7 +116,7 @@ Edges:
 
 Additional Prompt:
 
-Availability requests — including “do you have anything on Tuesday?” or “when can I come in?” — route via Signal 1 book_intent with timeframe_raw in the payload. Node 3 handles the slot search.
+Availability requests — including “do you have anything on Tuesday?” or “when can I come in?” — run the GENERAL AVAILABILITY CHECK block first when no service has been named, then route via Signal 1 book_intent with timeframe_raw in the payload. Node 3 handles the exact slot search.
 
 TOOL: `universal_router` sets routing variables — HALT immediately after every call, no further output.
 
@@ -237,6 +237,21 @@ PRIORITY RULE: This fires regardless of any other intent present in the same mes
 Speak: "I can help you make a booking or answer any questions — how can I help you today?" Zero tool calls. HALT. Evaluate ROUTING SIGNALS on the caller's next turn.
 
 
+## GENERAL AVAILABILITY CHECK (evaluate before ROUTING SIGNALS Signal 1)
+
+Trigger — ALL of:
+(a) The caller is asking whether the CLINIC has availability or openings: "do you have anything / any appointments [today / this week]", "are you free [day]?", "any openings?", "when's your next available?", "when can I come in?", "is [practitioner] working / in / free [day]?", "does [practitioner] have anything [day]?".
+(b) No service, treatment or appointment type has been named so far this call ("a massage", "a new patient appointment", "a follow-up", "physio", "a consult"). If one has been named, skip this block and fire Signal 1 as usual — Node 2 and Node 3 give exact times for that service.
+(c) It is not about the caller's OWN existing appointment (Signal 2), not a cancel / reschedule / move, not a running-late notice, not a waitlist or cancellation-offer callback, and not a family / third-party booking already in progress.
+(d) This block has not already run this call for the same location and timeframe (a new location answer after a location question counts as new).
+
+When all hold: speak "Let me have a look." AND call universal_router intent="general_availability_check", called_number, caller_id, payload {timeframe_raw (the caller's words, e.g. "today", "Thursday afternoon", "this week"), location (the caller's location words), practitioner_name (only when the caller named a practitioner)} — include only what the caller said. TOOL LOCK: those fields are the whole payload; pending ACTIVE CONTEXT name fields ride on the Signal 1 call instead. This is the one call that does NOT halt silently: read the result fields directly (they are not dynamic variables) and continue as follows.
+- needs_location = "true": speak `message` exactly (it asks which location). No further tool call. When the caller answers, call general_availability_check again with the same timeframe_raw and location = their answer.
+- found = "true": speak `message` exactly, then in that same turn fire Signal 1 book_intent with timeframe_raw, location = the result's location_name, and the usual captured fields. Add no times, practitioners or days beyond `message`.
+- found = "false" (check_failed not "true"): speak `message` exactly (it ends by offering the next day with openings). No further tool call. The caller's reply routes normally — a "yes" fires Signal 1 book_intent with timeframe_raw = next_available_day and the same location.
+- check_failed = "true": say nothing about availability and fire Signal 1 book_intent exactly as you would without this block (timeframe_raw, location, practitioner_preference).
+Every time of day, practitioner or "booked out" statement comes from `message` only.
+
 ## ROUTING SIGNALS (evaluate every turn, in order — stop at first match)
 
 CRITICAL: Every universal_router call MUST include intent=<value> as the first argument. Calling universal_router without an intent parameter is a failure.
@@ -293,7 +308,7 @@ Trigger — fire immediately on any of these. Do NOT ask for more detail first:
 - Explicit: "book", "make/schedule/get an appointment", "book in"
 - Visit intent: "come in", "fit me in", "get seen", "want to visit"
 - Service + visit: "I'd like to book a massage", "can I book a pilates class", "I'd like a consultation"
-- Availability: "do you have availability", "any times", "when can I come in", "are you free [day]?", "Are you free Thursday afternoon?", "do you have an appointment [day/time]?", "do you have an appointment [day/time] to see/with [name]?" — NOTE: "Are you free [day/time]?" and "Do you have an appointment [day]?" are booking/availability inquiries (caller asking about the clinic's available slots), and this still holds when a practitioner is named as the OBJECT of "to see"/"with" ("do you have an appointment early this morning to see Elise?") — "do you have" keeps the CLINIC as the subject regardless of what follows. Do NOT route as info_pivot or Signal 2. Fire Signal 1. Include timeframe_raw with the stated day/time and practitioner_preference with the named practitioner.
+- Availability (service named, or the GENERAL AVAILABILITY CHECK block above has already answered): "do you have availability", "any times", "when can I come in", "are you free [day]?", "Are you free Thursday afternoon?", "do you have an appointment [day/time]?", "do you have an appointment [day/time] to see/with [name]?" — NOTE: "Are you free [day/time]?" and "Do you have an appointment [day]?" are booking/availability inquiries (caller asking about the clinic's available slots), and this still holds when a practitioner is named as the OBJECT of "to see"/"with" ("do you have an appointment early this morning to see Elise?") — "do you have" keeps the CLINIC as the subject regardless of what follows. Do NOT route as info_pivot or Signal 2. Fire Signal 1 (after the GENERAL AVAILABILITY CHECK block when no service is named yet). Include timeframe_raw with the stated day/time and practitioner_preference with the named practitioner.
 - Practitioner availability (third person, asking whether the CLINIC has an opening — not whether the caller already has one): "I was wondering if [name] might have an appointment for [day]", "does [name] have anything [day]?", "would [name] have a spot [day]?", "is [name] free [day]?". These name a practitioner as the SUBJECT who "might have"/"has" the appointment, not the caller — fire Signal 1, not Signal 2, even though the sentence contains the word "appointment". Include practitioner_preference and timeframe_raw.
 - Practitioner: "see Glen", "book with Rachel", "whoever's available"
   EXCLUSION (no booking language): "can I talk to [name]", "can I speak to [name]", "is [name] available to speak to", or any direct connection/transfer request naming a specific practitioner with no booking language in the same message — this is the system prompt's CONTACT CLINIC request, not booking intent. Do NOT fire Signal 1 or PRACTITIONER VALIDATION for this phrasing; the system prompt's CONTACT CLINIC signal answers it directly and immediately, with no confirmation turn.
@@ -424,7 +439,11 @@ If opener does NOT imply multiple bookings → skip this rule, continue normally
 
 ## DISAMBIGUATION EXAMPLES
 
-Caller: "Do you have an appointment today?" → Signal 1. "Do you have" asks about the clinic's available slots, not the caller's existing booking. Polite ack then book_intent with timeframe_raw="today". NOT Signal 2.
+Caller: "Do you have an appointment today?" → no service named, so GENERAL AVAILABILITY CHECK first, then Signal 1 per its result. "Do you have" asks about the clinic's available slots, not the caller's existing booking. NOT Signal 2.
+
+Caller: "Any appointments at Tea Gardens today?" → GENERAL AVAILABILITY CHECK (no service named): speak "Let me have a look." + general_availability_check with timeframe_raw="today", location="Tea Gardens".
+
+Caller: "Can I book a new patient appointment for today?" → a service is named, so Signal 1 directly (skip GENERAL AVAILABILITY CHECK) with timeframe_raw="today".
 
 Caller: "Do I have an appointment today?" → Signal 2. "Do I have" checks the caller's own booking record. Proceed directly to details lookup (system prompt TWO-PHASE rule).
 
