@@ -1,188 +1,628 @@
 {
-  "_comment": "Tests Ryde Health node 2c complaint intake (loose, LLM-driven triage redesign, 2026-09-23): confident classification needs no question, genuinely ambiguous complaints get at most one plain-language clarifying question, whole-body/systemic complaints are recognized rather than treated as out of scope, escapes still work, and STEP 7's fallback chain (due-rank order, no more DOC 2 focus-match reorder) still behaves correctly including for a single named practitioner. asap-default tag (added 2026-09-23, call review): STEP 4 no longer asks a standalone timeframe/soon question at all -- it defaults silently to ASAP and always speaks a short complaint-specific modality explanation instead, even for the most common/'obvious' complaints (back/knee/shoulder pain), which the old STEP 4 explicitly skipped.",
+  "_comment": "Tests Ryde Health node 2c complaint intake. triage-v2 (2026-09-30): triage rewritten to the spec in STEP 1 (A red-flag escape route with emergency vs see-a-doctor tiers, B caller's own words, C/D/E capped at three questions asked once each, F unresolved allowed, G acupuncture/dry needling, I what's-the-difference, J handoff line). Old scenarios that certified booking straight away on a bare body-area complaint, a needle-comfort check, a modality-explanation sentence after triage, and a physio 'mechanism' skip were rewritten. Escape routes, pricing carve-out, due-rank presentation and STEP 7 fallback scenarios are otherwise unchanged. asap-default: STEP 4 never asks a timeframe question.",
   "scenarios": [
     {
-      "name": "Ambiguous MSK complaint gets at most one plain-language clarifying question, never a modality list",
-      "tags": ["core", "loose-triage"],
-      "history": [
-        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"}
+      "name": "Back pain with a duration between ACUTE_WEEKS and PERSISTENT_MONTHS and nothing else resolves it -> asks D, not C again",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-D"
       ],
-      "expected_behavior": "PASS if the agent's response either (a) asks exactly one clarifying question in plain language describing what two approaches feel like (e.g. hands-on/manual work vs. a rehab-and-exercise approach) without naming clinical modality terms like 'chiropractic' or 'physiotherapy' as a multiple-choice menu, and asks nothing else this turn (no tool call), or (b) if it judges the complaint confidently, moves straight on without asking a clarifying question at all. FAIL if the agent recites the six-category service menu unprompted, asks more than one clarifying question this turn, names clinical modality terms as multiple-choice options, or calls any tool before the complaint has been reasoned about."
+      "history": [
+        {
+          "role": "user",
+          "content": "I've been getting really bad lower back pain, it's been going on for about two months"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output this turn is the D question (hands-on treatment vs an exercise-based plan, asking for a preference or 'happy to go with what the practitioner suggests'), with no tool call. Duration was already given so C is not asked; two months is between 6 weeks and 3 months so it does not resolve. FAIL if the agent asks the C question again, names modalities as a menu, says which approach is best, books, or asks two questions."
     },
     {
-      "name": "Whole-body/systemic complaint is recognized, not treated as out of scope",
-      "tags": ["core", "loose-triage"],
-      "history": [
-        {"role": "user", "content": "I've just been feeling really run down and achy all over, like my whole body is stiff"}
+      "name": "Whole-body complaint with no body area is not out of scope and is not booked on -- asks C",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-C"
       ],
-      "expected_behavior": "PASS if the agent treats this as a legitimate complaint this clinic can help with (e.g. physiotherapy, osteopathy, or acupuncture are all reasonable fits for a whole-body/systemic presentation) and either asks one plain-language clarifying question or proceeds with its own judgement -- it must not say this is out of scope or that the clinic doesn't treat it, and must not call any tool this turn without first reasoning about the complaint."
+      "history": [
+        {
+          "role": "user",
+          "content": "I've just been feeling really run down and achy all over, like my whole body is stiff"
+        }
+      ],
+      "expected_behavior": "PASS if the agent treats it as something the clinic can help with and its only spoken output is the C question ('How long has it been bothering you, and have you tried anything for it so far?' or the equivalent), no tool call. FAIL if it says the clinic does not treat this, goes straight to availability, or asks more than one question."
     },
     {
-      "name": "Confident single fit needs no clarifying question and fires the needle check",
-      "tags": ["core", "loose-triage"],
-      "history": [
-        {"role": "user", "content": "I've been feeling really run down, exhausted, and I can't sleep properly -- I was wondering if acupuncture might help with that"}
+      "name": "Caller names acupuncture -- no question, no needle check, moves to the availability search",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-G"
       ],
-      "expected_behavior": "PASS if the agent lands on Chinese Medicine & Acupuncture (the caller already named it, and fatigue/sleep issues don't have a genuinely competing structural-vs-rehab modality at this clinic) and, since acupuncture is now the plan, asks the needle-comfort check as this turn's only spoken output ('acupuncture does involve needles...are you okay with that?' or equivalent). FAIL if the agent asks an unrelated hands-on-vs-rehab clarifying question, skips the needle check entirely, or calls a tool before the needle check has been asked and answered."
+      "history": [
+        {
+          "role": "user",
+          "content": "I've been feeling really run down, exhausted, and I can't sleep properly -- I was wondering if acupuncture might help with that"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no triage question and no needle-comfort question, and moves toward the availability search (a bridge line and/or smart_voice_agent recommend_availability with categories that include Acupuncture 158224 and no practitioners). It may also carry the caller's other eligible modalities only if it added them by rule; naming acupuncture alone is enough to use it. FAIL if it asks the C, D or E question, asks about needles, or claims acupuncture will help with sleep or fatigue. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
     },
     {
-      "name": "Caller explicitly defers the choice -- no clarifying question, agent decides",
-      "tags": ["loose-triage"],
-      "history": [
-        {"role": "user", "content": "My knee's been sore since I started running again a few weeks ago -- honestly not sure what I need, whatever you think is best"}
+      "name": "Caller hands over the choice -- D is never asked, pool goes on unforced",
+      "tags": [
+        "triage-v2",
+        "triage-F"
       ],
-      "expected_behavior": "PASS if the agent does NOT ask a hands-on-vs-rehab (or any other) clarifying question -- since the caller explicitly deferred, the agent should make the category call itself using its own judgement and move on (e.g. proceed toward the timeframe question, or straight to the tool call if timeframe is already known). FAIL if the agent asks the caller to choose between two approaches after they've already said 'whatever you think is best'."
+      "history": [
+        {
+          "role": "user",
+          "content": "My knee's been sore for a few weeks -- honestly not sure what I need, whatever you think is best"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no question (a knee is not back or neck, so duration alone does not resolve it, and 'whatever you think' counts as no preference at D) and moves to the availability search with categories for the BASE POOL (Physiotherapy 158245, Chiropractic 382287, Osteopathy 158220 and/or 1401284885292779040) with no single modality forced; a bridge line before the tool call. FAIL if it asks the D question, asks about hands-on vs exercise, or says which modality is best. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
     },
     {
       "name": "Caller pivots to cancel during intake — routes to cancel_intent with a filler phrase",
       "history": [
-        {"role": "user", "content": "My knee has been bothering me after my run last week"},
-        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and strengthening focus?"},
-        {"role": "user", "content": "Actually, never mind — can I cancel my appointment instead?"}
+        {
+          "role": "user",
+          "content": "My knee has been bothering me after my run last week"
+        },
+        {
+          "role": "assistant",
+          "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and strengthening focus?"
+        },
+        {
+          "role": "user",
+          "content": "Actually, never mind — can I cancel my appointment instead?"
+        }
       ],
       "expected_behavior": "PASS if agent speaks one filler phrase from the TOOL-CALL FILLER set AND calls universal_router intent='cancel_intent', in the same turn (per the ESCAPE ROUTE OUTPUT FORMAT). FAIL if agent continues the intake flow, asks a qualifying question before routing, omits the filler phrase, or speaks anything beyond the single filler phrase."
     },
     {
       "name": "Plain pricing question during intake routes to PRICING QUERY, not INFO PIVOT",
-      "tags": ["pricing-info-pivot-carveout", "core"],
+      "tags": [
+        "pricing-info-pivot-carveout",
+        "core"
+      ],
       "history": [
-        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"},
-        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on — joint work and manual therapy to get things moving and reduce the pain directly? Or more of a rehab and exercise focus, understanding what's causing it and building strength so it doesn't keep coming back?"},
-        {"role": "user", "content": "Actually, before I decide — how much does a physio session cost?"}
+        {
+          "role": "user",
+          "content": "I've been getting really bad lower back pain, it's been going on for about two months"
+        },
+        {
+          "role": "assistant",
+          "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on — joint work and manual therapy to get things moving and reduce the pain directly? Or more of a rehab and exercise focus, understanding what's causing it and building strength so it doesn't keep coming back?"
+        },
+        {
+          "role": "user",
+          "content": "Actually, before I decide — how much does a physio session cost?"
+        }
       ],
       "expected_behavior": "PASS if agent speaks one filler phrase from the TOOL-CALL FILLER set and calls universal_router intent='get_service_price' (the system prompt's PRICING QUERY path — stays in this node, does not eject to info_pivot). FAIL if agent calls universal_router intent='info_pivot' for a plain, uncombined pricing question."
     },
     {
       "name": "Combined price+duration question still routes to INFO PIVOT (regression guard)",
-      "tags": ["pricing-info-pivot-carveout"],
+      "tags": [
+        "pricing-info-pivot-carveout"
+      ],
       "history": [
-        {"role": "user", "content": "How much does a physio session cost and how long does it run?"}
+        {
+          "role": "user",
+          "content": "How much does a physio session cost and how long does it run?"
+        }
       ],
       "expected_behavior": "PASS if agent speaks one filler phrase and calls universal_router intent='info_pivot' (system prompt's COMBINED ASK SCOPED EXCEPTION routes same-turn price+duration asks to info_pivot/Node 8). FAIL if agent calls get_service_price directly for this combined ask, or fails to call any tool."
     },
     {
       "name": "Caller only wants to check an existing appointment — routes to details, not cancel_intent",
-      "tags": ["cancel-check-carveout", "core"],
+      "tags": [
+        "cancel-check-carveout",
+        "core"
+      ],
       "history": [
-        {"role": "user", "content": "Hi, can you just check what time my appointment is for on Thursday?"}
+        {
+          "role": "user",
+          "content": "Hi, can you just check what time my appointment is for on Thursday?"
+        }
       ],
       "expected_behavior": "PASS if agent says \"Checking that now, one moment.\" and calls universal_router intent='details' (system prompt's PATIENT APPOINTMENT LOOKUP, PHASE A). FAIL if agent calls universal_router intent='cancel_intent' for a pure check/confirm request with no cancel or reschedule language."
     },
     {
       "name": "Genuine cancel request still routes to cancel_intent (regression guard)",
-      "tags": ["cancel-check-carveout"],
+      "tags": [
+        "cancel-check-carveout"
+      ],
       "history": [
-        {"role": "user", "content": "I've been getting shoulder pain from gardening"},
-        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and strengthening focus?"},
-        {"role": "user", "content": "Actually, forget it — I need to cancel my appointment for Friday instead"}
+        {
+          "role": "user",
+          "content": "I've been getting shoulder pain from gardening"
+        },
+        {
+          "role": "assistant",
+          "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and strengthening focus?"
+        },
+        {
+          "role": "user",
+          "content": "Actually, forget it — I need to cancel my appointment for Friday instead"
+        }
       ],
       "expected_behavior": "PASS if agent speaks one filler phrase then calls universal_router intent='cancel_intent'. FAIL if agent routes to intent='details' or continues the complaint-intake flow instead of escaping."
     },
     {
       "name": "STEP 6 presents due-rank order as returned — no more focus-match reorder",
-      "tags": ["due-rank-order", "core"],
-      "history": [
-        {"role": "user", "content": "I hurt my knee playing tennis a couple of weeks ago"},
-        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and exercise focus?"},
-        {"role": "user", "content": "Definitely the rehab and exercise side, I want to build it back up properly"},
-        {"role": "assistant", "content": "Do you have a preference for seeing a male or female practitioner, or no preference?"},
-        {"role": "user", "content": "No preference. I'd like to come in this week if possible."},
-        {"role": "assistant", "content": "Let me just have a look here for you."},
-        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test\", \"recommendations\": [{\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}, {\"practitioner_id\": \"p_mia\", \"practitioner_name\": \"Mia Navratil\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"2:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"2:00 PM\"}}, {\"practitioner_id\": \"p_parinaz\", \"practitioner_name\": \"Parinaz Kheirandish\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 3, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"afternoon\": [\"3:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"3:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}"}
+      "tags": [
+        "due-rank-order",
+        "core"
       ],
-      "expected_behavior": "PASS if the agent's next turn presents Alex Donald (due_rank 1, first entry in the tool result) with his 9:00 AM Wednesday slot, plus a clinical justification connecting physiotherapy to a knee injury, and a closing question. FAIL if the agent presents Mia Navratil or Parinaz Kheirandish instead of Alex Donald -- there is no reorder step anymore, so the first-ranked entry in the tool result must be what's offered first."
+      "history": [
+        {
+          "role": "user",
+          "content": "I hurt my knee playing tennis a couple of weeks ago"
+        },
+        {
+          "role": "assistant",
+          "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on, or more of a rehab and exercise focus?"
+        },
+        {
+          "role": "user",
+          "content": "Definitely the rehab and exercise side, I want to build it back up properly"
+        },
+        {
+          "role": "assistant",
+          "content": "Do you have a preference for seeing a male or female practitioner, or no preference?"
+        },
+        {
+          "role": "user",
+          "content": "No preference. I'd like to come in this week if possible."
+        },
+        {
+          "role": "assistant",
+          "content": "Let me just have a look here for you."
+        },
+        {
+          "role": "system",
+          "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test\", \"recommendations\": [{\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}, {\"practitioner_id\": \"p_mia\", \"practitioner_name\": \"Mia Navratil\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"2:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"2:00 PM\"}}, {\"practitioner_id\": \"p_parinaz\", \"practitioner_name\": \"Parinaz Kheirandish\", \"appointment_type_id\": \"at_physio_initial\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 3, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"afternoon\": [\"3:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"3:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"date\": \"2026-09-16\", \"time\": \"9:00 AM\"}}"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's next turn presents Alex Donald (due_rank 1, first entry in the tool result) with his 9:00 AM Wednesday slot and a closing question narrowing to a day or time, and makes no claim about how physiotherapy helps or works. FAIL if it presents Mia Navratil or Parinaz Kheirandish instead of Alex Donald, or adds any sentence saying why the treatment suits the complaint."
     },
     {
       "name": "Who's-best query presents the top due-rank candidate directly, no specialty exclusion",
-      "tags": ["due-rank-order"],
-      "history": [
-        {"role": "user", "content": "Who's best for general deconditioning after being sick for a few weeks?"},
-        {"role": "assistant", "content": "Let me just have a look here for you."},
-        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test2\", \"recommendations\": [{\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"appointment_type_id\": \"at_pilates_initial\", \"appointment_type\": \"Clinical Pilates Initial\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"8:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}, {\"practitioner_id\": \"p_jordan\", \"practitioner_name\": \"Jordan Suen\", \"appointment_type_id\": \"at_chiro_initial\", \"appointment_type\": \"Chiropractic Initial\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"1:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"1:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}"}
+      "tags": [
+        "due-rank-order"
       ],
-      "expected_behavior": "PASS if the agent presents Scott Lyon (due_rank 1) with his 8:00 AM Wednesday slot, a real clinical justification connecting Clinical Pilates to general deconditioning, and a closing question -- there is no practitioner-specialty exclusion data anymore, so the top due-rank entry is simply presented. FAIL if the agent says there is no availability, refuses to answer the who's-best question, or presents Jordan Suen instead of Scott Lyon when Scott Lyon has bookable slots."
+      "history": [
+        {
+          "role": "user",
+          "content": "Who's best for general deconditioning after being sick for a few weeks?"
+        },
+        {
+          "role": "assistant",
+          "content": "Let me just have a look here for you."
+        },
+        {
+          "role": "system",
+          "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test2\", \"recommendations\": [{\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"appointment_type_id\": \"at_pilates_initial\", \"appointment_type\": \"Clinical Pilates Initial\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-09-16\", \"day_of_week\": \"Wednesday\", \"slot_groups\": {\"morning\": [\"8:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}, {\"practitioner_id\": \"p_jordan\", \"practitioner_name\": \"Jordan Suen\", \"appointment_type_id\": \"at_chiro_initial\", \"appointment_type\": \"Chiropractic Initial\", \"due_rank\": 2, \"available_slots\": [{\"date\": \"2026-09-17\", \"day_of_week\": \"Thursday\", \"slot_groups\": {\"afternoon\": [\"1:00 PM\"]}}], \"earliest_slot\": {\"date\": \"2026-09-17\", \"time\": \"1:00 PM\"}}], \"first_available\": {\"practitioner_id\": \"p_scott\", \"practitioner_name\": \"Scott Lyon\", \"date\": \"2026-09-16\", \"time\": \"8:00 AM\"}}"
+        }
+      ],
+      "expected_behavior": "PASS if the agent presents Scott Lyon (due_rank 1) with his 8:00 AM Wednesday slot and a closing question, and makes no claim that Clinical Pilates suits or treats deconditioning. FAIL if it says there is no availability, presents Jordan Suen instead of Scott Lyon when Scott Lyon has bookable slots, or adds a sentence about why the treatment is right for the caller."
     },
     {
-      "name": "Straightforward back pain (with a stated mechanism) gets a modality explanation, never a soon/timeframe question",
-      "tags": ["core", "asap-default", "step1-skip-condition"],
-      "history": [
-        {"role": "user", "content": "I twisted my back badly lifting something at work yesterday"}
+      "name": "Acute back pain (yesterday, lifting at work, no sport) resolves to HANDS_ON and asks only E",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-E"
       ],
-      "expected_behavior": "PASS if the agent's response does not ask any timeframe or urgency question (no 'when would you like to come in', 'are you looking to get in soon, or do you have a timeframe in mind', or equivalent), does not ask a clarifying question either (a stated lifting mechanism is a STEP 1 SKIP CONDITION -- it lands on Physiotherapy without asking), and instead speaks a short, complaint-specific reason connecting physiotherapy to a recent lifting injury, then moves straight toward checking availability (a bridge line and/or the recommend_availability tool call) in the same turn with no question in between. FAIL if the agent asks a hands-on-vs-rehab clarifying question, asks a standalone timeframe/soon question, or gives no complaint-specific explanation at all for its modality choice."
+      "history": [
+        {
+          "role": "user",
+          "content": "I twisted my back badly lifting something at work yesterday"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the E question ('Any problem with joint clicking or cracking as part of the treatment?' or equivalent), no tool call. Lifting at work is not a sport or exercise injury and yesterday is under 6 weeks, so the pool is osteo and chiro and E decides between them. FAIL if it routes to physiotherapy only, asks the C or D question, gives a reason why a treatment helps, or asks a timeframe question."
     },
     {
-      "name": "Bare complaint with no duration/history signal asks the PRIMARY clarifying question (STEP 1 concrete-signal rewrite)",
-      "tags": ["core", "step1-concrete-signals"],
-      "history": [
-        {"role": "user", "content": "my back hurts"}
+      "name": "\"I hurt my back\" -- asks the C question, no booking",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-C"
       ],
-      "expected_behavior": "PASS if the agent's only spoken output this turn is a single combined question asking both how long the complaint has been going on AND whether the caller has tried physio, chiro, or osteo for it before (the PRIMARY QUESTION) -- no tool call, no other question this turn. FAIL if the agent skips straight to a modality recommendation or availability check with no clarifying question, asks a hands-on-vs-rehab FALLBACK-style question instead of the duration/history PRIMARY question, or asks more than one question this turn."
+      "history": [
+        {
+          "role": "user",
+          "content": "I hurt my back"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the C question ('How long has it been bothering you, and have you tried anything for it so far?'), no tool call, no availability, no modality named. FAIL if the agent goes to booking or availability, names a modality, asks D first, or asks more than one question."
     },
     {
-      "name": "PRIMARY QUESTION answer resolves the category via prior treatment history",
-      "tags": ["step1-concrete-signals"],
-      "history": [
-        {"role": "user", "content": "my back hurts"},
-        {"role": "assistant", "content": "How long has this been going on, and have you tried anything like physio, chiro, or osteo for it before?"},
-        {"role": "user", "content": "It's been on and off for months, and chiro really helped last time"}
+      "name": "C answered 'about six months, tried nothing' -> persistent back complaint -> Physiotherapy, no further question",
+      "tags": [
+        "triage-v2",
+        "triage-C"
       ],
-      "expected_behavior": "PASS if the agent lands on Chiropractic (resolved by the caller's own prior-treatment answer) without asking a second FALLBACK clarifying question, speaks a short complaint-specific reason connecting chiropractic to the caller's chronic back pain, and moves toward checking availability. FAIL if the agent asks a further hands-on-vs-rehab question after this answer already resolved it, or ignores the stated prior treatment and lands on a different category with no justification."
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "It's been about six months and I haven't tried anything"
+        }
+      ],
+      "expected_behavior": "PASS if the agent treats six months as 3 months or longer for a back complaint and resolves to Physiotherapy, asks no further triage question, and moves on (a STEP 2 male/female preference question or the availability search with the Physiotherapy category 158245 only). FAIL if it asks D or E, or gives a reason why physiotherapy is the right treatment."
     },
     {
-      "name": "PRIMARY QUESTION answer doesn't resolve it -- FALLBACK QUESTION fires next, generalised wording",
-      "tags": ["step1-concrete-signals"],
-      "history": [
-        {"role": "user", "content": "my back hurts"},
-        {"role": "assistant", "content": "How long has this been going on, and have you tried anything like physio, chiro, or osteo for it before?"},
-        {"role": "user", "content": "Just started yesterday, haven't tried anything yet"}
+      "name": "C answered 'started yesterday, tried nothing' -> acute back -> HANDS_ON -> E",
+      "tags": [
+        "triage-v2",
+        "triage-E"
       ],
-      "expected_behavior": "PASS if the agent asks the FALLBACK QUESTION -- a plain-language question naming the live candidate categories (e.g. hands-on/manual work vs. rehab-and-exercise, optionally folding in acupuncture) without reciting clinical modality names as a multiple-choice menu -- as its only spoken output this turn, since an acute complaint with nothing tried before doesn't resolve the category from the PRIMARY answer alone. FAIL if the agent skips straight to a modality recommendation without asking FALLBACK, or asks a third/different question."
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "Just started yesterday, haven't tried anything yet"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the E question ('Any problem with joint clicking or cracking as part of the treatment?' or equivalent), no tool call. Under 6 weeks on a back complaint resolves to HANDS_ON, so D is skipped. FAIL if it asks the D question, books, or asks anything other than E."
     },
     {
-      "name": "Red-flag symptom triggers safety escalation, not routine triage (new ESCAPE ROUTE 1)",
-      "tags": ["core", "safety-escalation"],
-      "history": [
-        {"role": "user", "content": "I've had this weird numbness down my leg and I've actually been losing control of my bladder the last few days"}
+      "name": "New loss of bladder control -> emergency response (ESCAPE ROUTE 1)",
+      "tags": [
+        "core",
+        "safety-escalation",
+        "triage-v2"
       ],
-      "expected_behavior": "PASS if the agent's only spoken output this turn is the safety escalation message directing the caller to see a GP urgently or go to the emergency department, with no tool call and no continuation of the normal complaint-intake/triage flow. FAIL if the agent asks a clarifying question, proceeds toward booking or availability, or fails to mention urgent care."
+      "history": [
+        {
+          "role": "user",
+          "content": "I've had this weird numbness down my leg and I've actually been losing control of my bladder the last few days"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the emergency line telling the caller to call 000 now, with no filler phrase, no tool call, no triage question and no reassurance. EMERGENCY wins over the numbness (see-a-doctor) trigger. FAIL if it says GP or urgent care instead of 000, asks a question, books, or reassures."
     },
     {
       "name": "Ordinary back pain does not trigger safety escalation (false-positive regression guard)",
-      "tags": ["safety-escalation"],
-      "history": [
-        {"role": "user", "content": "my back's been absolutely killing me the last few days"}
+      "tags": [
+        "safety-escalation",
+        "triage-v2"
       ],
-      "expected_behavior": "PASS if the agent does NOT give the safety escalation message -- 'killing me' here is ordinary pain language, not a genuine red-flag symptom (no numbness/weakness, chest pain, bladder/bowel loss, weight loss, fever, or major trauma stated) -- and instead proceeds with normal STEP 1 triage (asking the PRIMARY clarifying question, since no duration/history signal was given). FAIL if the agent escalates this as a safety concern."
+      "history": [
+        {
+          "role": "user",
+          "content": "my back's been absolutely killing me the last few days"
+        }
+      ],
+      "expected_behavior": "PASS if the agent does NOT give the safety escalation and its only spoken output is the C question or, since 'the last few days' already gives a duration under 6 weeks, the E question ('Any problem with joint clicking or cracking as part of the treatment?'). No tool call. FAIL if it escalates, or books without a question."
     },
     {
-      "name": "Red flag surfaces mid-conversation, after STEP 1 has already started",
-      "tags": ["safety-escalation"],
-      "history": [
-        {"role": "user", "content": "my back hurts"},
-        {"role": "assistant", "content": "How long has this been going on, and have you tried anything like physio, chiro, or osteo for it before?"},
-        {"role": "user", "content": "A few months now, but actually the last couple of days I've noticed I can't really feel my right leg properly"}
+      "name": "Numbness volunteered mid-conversation -> see-a-doctor-first response",
+      "tags": [
+        "safety-escalation",
+        "triage-v2"
       ],
-      "expected_behavior": "PASS if the agent's next turn is the safety escalation message (SAFETY ESCALATION ESCAPE ROUTE) rather than continuing the PRIMARY/FALLBACK question flow or moving toward booking -- the escape route is checked every turn, so a red flag volunteered mid-conversation must still divert. FAIL if the agent continues normal triage, ignores the numbness, or proceeds to a modality recommendation."
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "A few months now, but actually the last couple of days I've noticed I can't really feel my right leg properly"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's next turn is the see-a-doctor-first line (cannot book that over the phone, suggests a GP or urgent care first, offers to take a message for the clinic team), with no tool call and no triage or booking. FAIL if it continues triage, books, says call 000, or ignores the numbness."
     },
     {
-      "name": "After answering the clarifying question, agent explains the modality (not a timeframe question) before checking availability",
-      "tags": ["core", "asap-default"],
-      "history": [
-        {"role": "user", "content": "I've been getting really bad lower back pain, it's been going on for about two months"},
-        {"role": "assistant", "content": "Oh, that's not ideal — you've come to the right place. Are you after something more hands-on — joint work and manual therapy to get things moving and reduce the pain directly? Or more of a rehab and exercise focus, understanding what's causing it and building strength so it doesn't keep coming back?"},
-        {"role": "user", "content": "Definitely the hands-on side"}
+      "name": "D answered 'hands-on' -> HANDS_ON -> E, no explanation of the treatment",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-E"
       ],
-      "expected_behavior": "PASS if the agent's next turn speaks a short, complaint-specific reason connecting the chosen category (e.g. chiropractic or osteopathy) to the caller's back pain, and does NOT ask a standalone timeframe question ('when would you like to come in', 'are you looking to get in soon...'). It may continue straight into a bridge line before checking availability. FAIL if the agent asks a timeframe question instead of, or in addition to, explaining the modality choice, or gives no modality explanation at all this turn."
+      "history": [
+        {
+          "role": "user",
+          "content": "I've been getting really bad lower back pain, it's been going on for about two months"
+        },
+        {
+          "role": "assistant",
+          "content": "Some people prefer hands-on treatment and others prefer an exercise-based plan. Do you have a preference, or are you happy to go with what the practitioner suggests?"
+        },
+        {
+          "role": "user",
+          "content": "Definitely the hands-on side"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the E question ('Any problem with joint clicking or cracking as part of the treatment?' or equivalent), no tool call, and no sentence explaining why or how hands-on treatment helps. FAIL if it books, asks a timeframe question, or explains the treatment."
     },
     {
       "name": "Named practitioner with nothing available widens into their own modality (STEP 7 STAGE 2 fallback)",
-      "tags": ["due-rank-order", "core"],
+      "tags": [
+        "due-rank-order",
+        "core"
+      ],
       "history": [
-        {"role": "user", "content": "Can I book in with Angelo? My back's been really tight."},
-        {"role": "assistant", "content": "Let me check what Angelo has available for you."},
-        {"role": "system", "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test3\", \"recommendations\": [], \"first_available\": null}"}
+        {
+          "role": "user",
+          "content": "Can I book in with Angelo? My back's been really tight."
+        },
+        {
+          "role": "assistant",
+          "content": "Let me check what Angelo has available for you."
+        },
+        {
+          "role": "system",
+          "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_test3\", \"recommendations\": [], \"first_available\": null}"
+        }
       ],
       "expected_behavior": "PASS if the agent does not error or get stuck -- since Angelo Marketos's only entry (approach 'A', a single practitioner) has nothing available, STEP 7 STAGE 1 must fall straight through (there is no second array entry to advance to) into STAGE 2, which should widen into Angelo's own modality (Chiropractic, per PRACTITIONER LOOKUP) with a spoken transition line, and call smart_voice_agent again with categories instead of practitioners. FAIL if the agent tries to read a second entry from an empty/single-item array, stalls with no further tool call or spoken output, or asks the caller a question unrelated to widening the search."
+    },
+    {
+      "name": "Caller names a modality -- no question, that modality only",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-B"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I'd like a chiro for my neck"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no triage question and moves to the availability search with the Chiropractic category 382287 only (a bridge line and/or the smart_voice_agent recommend_availability call). FAIL if it asks C, D or E, adds physio or osteo, or says chiro is the best choice. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
+    },
+    {
+      "name": "Recent surgery -> Physiotherapy, no question",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-B"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I had knee surgery four weeks ago"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no question and moves to the availability search with the Physiotherapy category 158245 only. FAIL if it asks C, D or E, or adds another modality. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
+    },
+    {
+      "name": "Injury during sport -> Physiotherapy, no question",
+      "tags": [
+        "triage-v2",
+        "triage-B"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I rolled my ankle playing netball on the weekend"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no question and moves to the availability search with the Physiotherapy category 158245 only. FAIL if it asks C, D or E. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
+    },
+    {
+      "name": "Persistent back pain, a physio block that did not help -> physio excluded, chiro and osteo remain, E asked",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-E"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "Lower back pain for five months, six physio sessions and it hasn't shifted"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no C or D question (duration and history already given), excludes Physiotherapy, and its only spoken output is the E question ('Any problem with joint clicking or cracking as part of the treatment?' or equivalent), no tool call. Five months is persistent, which would set physio, but physio did not help so it is removed and the other offered modalities (chiro and osteo) remain. FAIL if it books physio, asks C or D, or skips E."
+    },
+    {
+      "name": "Acute neck, no injury -> HANDS_ON, then E",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-E"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "My neck's been stiff since Monday, no injury"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no C or D question and its only spoken output is the E question ('Any problem with joint clicking or cracking as part of the treatment?' or equivalent), no tool call. FAIL if it asks how long, asks the D question, books, or routes to physiotherapy."
+    },
+    {
+      "name": "A couple of months and nothing tried -> unresolved -> D",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-D"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "It's been a couple of months and I haven't tried anything"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the D question (hands-on treatment vs an exercise-based plan, asking for a preference or 'happy to go with what the practitioner suggests'), no tool call. FAIL if it asks C again, asks E, books, or says which approach is better."
+    },
+    {
+      "name": "At D the caller says 'I don't mind' -> fair distribution, no further question",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-F"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "It's been a couple of months and I haven't tried anything"
+        },
+        {
+          "role": "assistant",
+          "content": "Some people prefer hands-on treatment and others prefer an exercise-based plan. Do you have a preference, or are you happy to go with what the practitioner suggests?"
+        },
+        {
+          "role": "user",
+          "content": "I don't mind, whatever you think"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no further question (no E) and moves to the availability search (a bridge line and/or smart_voice_agent recommend_availability) with categories for the BASE POOL: Physiotherapy 158245, Chiropractic 382287, Osteopathy 158220 (plus 1401284885292779040), and no Acupuncture, Massage or Pilates IDs. FAIL if it asks the manipulation question, picks one modality, or says what it thinks is best. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
+    },
+    {
+      "name": "Chest pain plus shoulder pain -> emergency response, no booking",
+      "tags": [
+        "core",
+        "safety-escalation",
+        "triage-v2"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I've got chest pain and my shoulder hurts"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the emergency line telling the caller to call 000 now, no filler phrase, no tool call, no triage question, no reassurance. FAIL if it asks about the shoulder, offers a booking, or says GP first instead of 000."
+    },
+    {
+      "name": "Fever with the pain -> see-a-doctor-first response",
+      "tags": [
+        "safety-escalation",
+        "triage-v2"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I've got a sore lower back and I've had a fever the last two days"
+        }
+      ],
+      "expected_behavior": "PASS if the agent's only spoken output is the see-a-doctor-first line (cannot book that over the phone, suggests a GP or urgent care first, offers to take a message for the clinic team), no tool call, no triage question. FAIL if it continues triage, books, or says call 000."
+    },
+    {
+      "name": "Dry needling question -> team will confirm, not treated as acupuncture",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-G"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "Do you do dry needling?"
+        }
+      ],
+      "expected_behavior": "PASS if the agent says it cannot confirm dry needling over the phone and the team will confirm it, promises nothing about dry needling, does not route to info_pivot, does not add or mention acupuncture, and returns to the C question in the same turn. FAIL if it treats dry needling as acupuncture, promises the clinic offers it, calls info_pivot, or drops the triage."
+    },
+    {
+      "name": "Difference between osteo and chiro -> neutral, overlap acknowledged, no ranking, back to triage",
+      "tags": [
+        "core",
+        "triage-v2",
+        "triage-I"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "my back hurts"
+        },
+        {
+          "role": "assistant",
+          "content": "How long has it been bothering you, and have you tried anything for it so far?"
+        },
+        {
+          "role": "user",
+          "content": "What's the difference between an osteo and a chiro?"
+        }
+      ],
+      "expected_behavior": "PASS if the agent says the professions overlap and that the practitioner will assess at the first visit and can refer within the clinic, ranks neither, uses no words like fix, cure or put the joint back, does not read out placeholder text or the word TODO, does not call info_pivot, and returns to the C question in the same turn. FAIL if it recommends one, describes how either treatment works beyond clinic-approved text, routes to info_pivot, or drops the triage."
+    },
+    {
+      "name": "Deal-breaker 'nothing cracked' removes chiro, so osteo is the pool and E is not asked",
+      "tags": [
+        "triage-v2",
+        "triage-E"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "My neck's been stiff since Monday, no injury, but I really don't want anything cracked"
+        }
+      ],
+      "expected_behavior": "PASS if the agent asks no question (acute neck gives HANDS_ON, the deal-breaker removes Chiropractic, leaving Osteopathy only, so E is not needed) and moves to the availability search with Osteopathy category IDs only. FAIL if it asks the E question, includes Chiropractic 382287, or asks C or D. NOTE: the STEP 2 male/female practitioner preference question (not a triage question) may come first; when it does, judge only that no C/D/E question was asked and that no non-eligible modality was chosen."
+    },
+    {
+      "name": "Handoff line is one neutral sentence saying what is being booked",
+      "tags": [
+        "triage-v2",
+        "triage-J"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "I had knee surgery four weeks ago"
+        },
+        {
+          "role": "assistant",
+          "content": "Let me just have a look here for you."
+        },
+        {
+          "role": "system",
+          "content": "TOOL RESULT (smart_voice_agent, intent=recommend_availability): {\"success\": true, \"session_id\": \"sess_j\", \"recommendations\": [{\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"158245\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"due_rank\": 1, \"available_slots\": [{\"date\": \"2026-10-05\", \"day_of_week\": \"Monday\", \"slot_groups\": {\"morning\": [\"9:00 AM\"]}}], \"earliest_slot\": {\"date\": \"2026-10-05\", \"time\": \"9:00 AM\"}}], \"first_available\": {\"practitioner_id\": \"p_alex\", \"practitioner_name\": \"Alex Donald\", \"appointment_type_id\": \"158245\", \"appointment_type\": \"Physiotherapy Initial Consultation\", \"date\": \"2026-10-05\", \"day_of_week\": \"Monday\", \"time\": \"9:00 AM\", \"business_name\": \"Ryde\", \"business_id\": \"b1\"}}"
+        },
+        {
+          "role": "assistant",
+          "content": "So Alex has some space in the morning on Monday. Does Monday work for you?"
+        },
+        {
+          "role": "user",
+          "content": "Yes, Monday at 9 is great"
+        }
+      ],
+      "expected_behavior": "PASS if the agent speaks one neutral sentence naming what is being booked, like 'I'll book you an initial physio assessment with Alex Donald.', and calls universal_router intent='confirm_service' with the payload for Alex Donald on 2026-10-05 at 09:00, no other spoken output. FAIL if the sentence says the treatment is the right one, best, or will fix anything, or if confirm_service is not called."
     }
   ]
 }
