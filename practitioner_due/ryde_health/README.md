@@ -1,5 +1,57 @@
 # Ryde Health — Practitioner Due / Complaint Intake Integration
 
+## Status (2026-09-30) — Node 2C triage rewritten to the clinician-approved spec (local commit, NOT live)
+
+This section replaces the triage descriptions in the older Status sections below (they are kept as
+history). The rewrite is committed in the `nodes` submodule but **not pushed to `nodes_spec`**, so it
+is not live; the red-flag list is marked `DRAFT` in the prompt and stays that way until the clinic
+owner signs it off.
+
+How Node 2C triages now (`node_2c_complaint_intake.txt`, STEP 1, settings block at the top of the file):
+- **Settings** (a clinic can change): `ACUTE_WEEKS = 6`, `PERSISTENT_MONTHS = 3`,
+  `RECENT_SURGERY_MONTHS = 3`, `EMERGENCY_NUMBER = 000`, `HANDS_ON = osteo and chiro`.
+- **Red flags (ESCAPE ROUTE 1, checked first every turn, marked DRAFT).** Two tiers: EMERGENCY
+  (chest pain, trouble breathing, sudden severe headache, new loss of bladder or bowel control) gets
+  "call 000 now"; SEE A DOCTOR FIRST (new numbness or weakness, fever with the pain, unexplained weight
+  loss, car accident or fall from a height, suspected broken bone not yet seen) gets "see a GP or
+  urgent care first, leave a message for the clinic team". Emergency wins when both are present.
+  Night pain is deliberately not on the list.
+- **Base pool:** Physiotherapy, Chiropractic, Osteopathy. Remedial Massage and Clinical Pilates join
+  only when the caller names them. Chinese Medicine & Acupuncture joins on a named request, or on stress,
+  poor sleep, headaches or migraines after a one-off consent question (below).
+- **The caller's own words come first (B):** a named modality or practitioner, recent surgery, an
+  injury during sport or exercise, or "hands-on"/"exercise" settle the routing with no question. A
+  modality the caller says did not help is removed; a deal-breaker ("nothing cracked", "no needles")
+  removes what it rules out. A body-area complaint alone is never enough to book on.
+- **At most three triage questions, one per turn, each asked once:**
+  C (two halves: how long, and whether they have tried anything — only the unanswered half is asked,
+  and any stated duration counts, including "a few days", "since Monday", "last week"), D (hands-on or
+  exercise-based), E (joint clicking or cracking, only when it decides between chiro and osteo).
+  Back or neck under `ACUTE_WEEKS` goes hands-on then E; `PERSISTENT_MONTHS` or longer goes to
+  Physiotherapy; in between goes to D.
+- **Unresolved is allowed (F):** the pool goes to the availability search as is and the backend spreads
+  new patients fairly across it. "Whatever you think" counts as no preference.
+- **Acupuncture consent (G):** when acupuncture would enter the pool because of stress, sleep or
+  headaches, ask once "Would you be okay with acupuncture? It uses fine needles." Yes keeps it, no
+  removes it and it is never mentioned again. It sits outside the three-question cap and is skipped when
+  the caller asked for acupuncture or needles, or already said no needles. Dry needling is not
+  acupuncture: "the team will confirm it with you", nothing else promised.
+- **What's the difference (I):** only the overlap sentences ("The professions overlap. The practitioner
+  will assess at the first visit, and can refer within the clinic.") until the clinic supplies approved
+  per-modality lines — the `TODO` placeholders in the file. Never ranks, never says fix/cure.
+- **Gender preference is no longer asked** (STEP 2 is now a pass-through). It is only used when the
+  caller raises it, as a filter on the availability search.
+- **Handoff line (STEP 8):** one neutral sentence, "I'll book you an initial [modality] assessment with
+  [practitioner]". No justification of why that practitioner.
+- **Tests:** `node_2c_complaint_intake_scenarios.json` (40 scenarios; triage ones are tagged `triage-v2`
+  and `triage-v3`).
+
+Open items (see also the "Open / deferred decisions" section below):
+1. Clinician sign-off of the red-flag list, then remove the `DRAFT` marker. Not pushed until then.
+2. Approved one-line descriptions for Physiotherapy, Chiropractic and Osteopathy (STEP 1 I, `TODO`).
+3. Practitioner tags (dry needling, special interests) so dry needling can be matched to practitioners
+   instead of "the team will confirm". None today; matching is by modality only.
+
 ## Status (2026-09-23, night) — STEP 1 design proposal + safety escalation IMPLEMENTED and patched live
 
 The STEP 1 design proposal below (concrete SKIP CONDITION / PRIMARY QUESTION / FALLBACK QUESTION)
@@ -531,6 +583,15 @@ Acupuncture, Remedial Massage, Clinical Pilates) — this README just hadn't nam
 (Remedial Massage, Clinical Pilates) anywhere in its own prose. The FALLBACK QUESTION wording was
 generalised to say explicitly that any of the six can be a live candidate, not only the four used
 in its example sentences.
+
+### F. Triage v3 open items (2026-09-30)
+
+- Red-flag list (ESCAPE ROUTE 1) awaits clinician sign-off; `DRAFT` marker stays until the clinic owner
+  approves it.
+- STEP 1 I needs clinic-approved one-line descriptions for Physiotherapy, Chiropractic and Osteopathy
+  (`TODO` placeholders; overlap sentences only until supplied).
+- Practitioner tags (dry needling and similar) are not built; add them later and match on them in STEP 5
+  instead of "the team will confirm".
 
 ## Verification before patching
 
