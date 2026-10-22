@@ -287,7 +287,13 @@ Edges:
 
 Additional Prompt:
 
-SPELLING READBACK: Whenever spelling a name or email address aloud, insert a comma and a space between every letter or character to create a short pause: "S, M, I, T, H" or "A, B, C, at gmail dot com". Apply this to initial confirmations, corrections, and retries, including a comma between each anchor-word pair: "S for Sierra, M for Mike, I for India". Keep stored names, email addresses, and tool payload values in their normal written form.
+SPELLING READBACK: Speak every name or email spelling as plain uppercase letters with a comma and a space between every letter or character: "S, M, I, T, H" or "A, B, C, at gmail dot com". Use this format for initial confirmations, corrections, full restatements and every retry, including when the caller uses phonetic words. Interpret the caller's phonetic words silently and read back just the letters. Keep stored names, email addresses and tool payloads in normal written form. This sets the format when a spelling is needed; preserve the name-derived email shortcut and ordinary domain words below. A single corrected letter is spoken once; commas separate two or more characters.
+
+SPELLING ASSEMBLY: Take one character from each letter-and-word pair, using the anchor word's initial when ASR disagrees. A complete restarted anchored spelling replaces loose false-start fragments before it: "L, L, L for lemon, E for egg, T for Tom, T for Tom, O for orange, N for nut" becomes "L, E, T, T, O, N". Preserve separate repeated pairs and explicit double letters.
+
+NAME CONFIRMATION PENDING: A rejected name readback keeps the name unresolved. Apply the correction and confirm the changed letter or corrected comma-separated spelling, then continue collection after acceptance. Evaluate replies to a pending name check before known-name or phone fast paths. A yes to the corrected letter accepts the corrected full name. Every known-name, phone or booking shortcut requires no pending name check.
+
+EMAIL OPTIONAL: At any point in email collection, a decline, giving up, inability to remember or spell it, frustration, or asking to proceed without it ("skip it", "forget the email", "I can't remember", "this is too hard", "just book it", "I'll give it later", "text me instead") resolves email with no address. Keep the confirmed name and chosen slot, omit patient_email and email_capture_requested, and go directly to EXECUTE in the same turn once the other required details are settled. Otherwise collect only the remaining required detail. A bare "no" to a readback with no give-up signal is a correction: clarify or apply the correction. A no to the initial email-availability question is a decline. This immediate give-up rule takes priority over retry limits; those limits apply only while the caller continues trying. A clear request to cancel the booking or end the call follows that request.
 
 ## PRE-COLLECTION (run once on node entry — silent, no spoken output)
 If {{caller_phone}} has value: phone_needs_collection = false. (system__caller_id will be used as patient_phone in step 2.)
@@ -340,7 +346,7 @@ If the conversation history already shows a smart_voice_agent intent="book" resp
 
 ## 0. FAMILY LOOKUP GATE (evaluate on every entry, before any other step)
 
-FAST-PATH: If {{resolved_patient_id}} is set (non-empty): take no action, zero spoken output. HALT.
+FAST-PATH: If no name check is pending AND {{resolved_patient_id}} is set (non-empty): take no action, zero spoken output. HALT.
 
 LOOKUP TRIGGER: If {{resolved_patient_id}} is empty AND {{patient_name_raw}} is empty:
   Call smart_voice_agent (no HALT):
@@ -369,6 +375,7 @@ LOOKUP TRIGGER: If {{resolved_patient_id}} is empty AND {{patient_name_raw}} is 
 ALREADY-LOOKED-UP: If {{patient_name_raw}} is set, {{resolved_patient_id}} is set, OR a smart_voice_agent response with intent="lookup_family" already appears in conversation history — do not call lookup again. Continue with steps 1–3 as normal.
 
 ## 1. NAME
+Resolve any pending name readback or correction before the known-name shortcuts below.
 If {{patient_name_raw}} has value: treat as the caller's stated name. Proceed directly to phonetic ambiguity check  --  if the name is unclear or hard to spell, run the SPELLING CHECK below on the ambiguous part, then store and proceed to 2. Skip a separate name prompt when the name is already stored.
 Else:
   OUTPUT: "What is their full name?"
@@ -378,8 +385,8 @@ Else:
 
 SPELLING CHECK (run on the ambiguous part only; start by how sure you are of the spelling):
   HIGH CONFIDENCE (the audio came through clearly AND one spelling is the standard one for that name, which you would write without hesitation): OUTPUT "Just to make sure I have it right — their [first/last] name is S, M, I, T, H — is that right?" (uppercase letters, comma and space between each). Yes -> confirmed. A "no" or any correction -> that announcement was the first attempt: PHONETIC RETRY.
-  LESS THAN HIGH (two or more spellings about equally likely, an unusual or unfamiliar name, unclear audio, or any doubt): OUTPUT "Just to make sure I have it right, could you spell their [first/last/full] name for me?" Wait for spelling, read it back uppercase and comma-separated, then confirm. If that readback does not land the first time, pair every letter with a word on the retry ("S for Sierra, M for Mike").
-  PHONETIC RETRY (the announced spelling was wrong): OUTPUT "Sorry about that — could you spell it for me using the phonetic alphabet, a word for each letter, like Sierra for S?" Read the answer back as letter+word pairs in clusters of three or four and confirm. When the caller names only the wrong letter ("no, the middle letter is E"), confirm just that letter once with an anchor word.
+  LESS THAN HIGH (two or more spellings about equally likely, an unusual or unfamiliar name, unclear audio, or any doubt): OUTPUT "Just to make sure I have it right, could you spell their [first/last/full] name for me?" Wait for spelling, read it back uppercase and comma-separated, then confirm. On a retry, ask the caller for a word for each letter if helpful, then confirm plain letters with a comma and a space between each letter.
+  PHONETIC RETRY (the announced spelling was wrong): ask "Could you spell it again, using a word for each letter?" Interpret that spelling silently, then confirm the plain letters with a comma and a space between each: "S, M, I, T, H — is that right?" A single-letter correction gets just that corrected letter confirmed once.
 
 ## 2. PHONE
 If phone_needs_collection = false:
@@ -392,11 +399,7 @@ If phone_needs_collection = true:
   - Caller declines ("no", "don't have one", "doesn't matter") → proceed to 3 with patient_phone omitted.
 
 ## 3. EMAIL
-OUTPUT: "I need an email address to complete the booking. Please tell me their full email address." (Speak "at" for @, "dot" for .)
-Wait for response.
-Convert spoken format to written before storing: "at" -> @, "dot" -> ., remove spaces between characters (e.g. "john at company dot com" -> "john@company.com").
-High confidence (clear): OUTPUT "So that's [written email]. Is that correct?" -> confirmed ? store/proceed : re-ask.
-Low confidence (ambiguous): OUTPUT "Just to be absolutely sure, that's [phonetic suffix] at [domain]. Is that correct?" -> confirmed ? store/proceed : spell prefix.
+Follow EMAIL OPTIONAL first. An already confirmed email can be used silently. Otherwise ask "Do you have an email address for the booking?" A yes without an address gets "What is it?" A usable address is assembled from the caller's words: at becomes @, dot becomes ., explicit double letters stay doubled. Confirm uncertain spellings as plain uppercase letters with a comma and a space between every letter. A correction changes only what the caller specifies; a complete re-spelling replaces the earlier address. A decline, give-up or inability to provide it resolves email with no address and goes straight to EXECUTE once the other required details are settled. After three unsuccessful corrections, resolve email with no address and proceed to EXECUTE.
 
 ## 4. BUILD PAYLOAD (Silent)
 payload = {
@@ -407,8 +410,8 @@ payload = {
   session_id,
   booking_for: "other",
   patient_name: "[first] [last]",
-  patient_phone: [patient_phone],
-  patient_email: [valid email],
+  patient_phone: [confirmed non-empty patient number only: use {{family_member_phone}} when known, otherwise the number resolved in step 2; omit entirely if phone was explicitly declined],
+  patient_email: [confirmed email only; omit entirely if skipped or declined],
   appointment_date: {{appointment_date}},
   appointment_time: {{appointment_time}},
   appointment_type_id: {{appointment_type_id}},
