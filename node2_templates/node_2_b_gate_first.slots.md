@@ -467,7 +467,7 @@ working_type = "Collagen-Stimulating Biostimulator", working_id = "1947784906704
 
 ### REGENERATIVE
 Single appointment type. No variant question.
-working_type = "Regenerative Biotech Therapy (Signal-Cell Skin & Scalp Therapy) + LED light", working_id = "1947811726971905615". Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router. Per CONFIRM_SERVICE FILLER RULE. HALT.
+working_type = "Regenerative Biotech Therapy (Signal-Cell Skin Facial & Scalp Therapy) + LED light", working_id = "1947811726971905615". Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router. Per CONFIRM_SERVICE FILLER RULE. HALT.
 
 ```
 
@@ -893,7 +893,7 @@ rendered length: 42395   original length: 42140
  Ask: (SELF/null) "What area are you looking to address -- acne or oily skin, anti-aging, skin brightening and tone, hand rejuvenation, general exfoliation and rejuvenation, or hydration and barrier support?"
 @@ -316,7 +313,6 @@
  Single appointment type. No variant question.
- working_type = "Regenerative Biotech Therapy (Signal-Cell Skin & Scalp Therapy) + LED light", working_id = "1947811726971905615". Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router. Per CONFIRM_SERVICE FILLER RULE. HALT.
+ working_type = "Regenerative Biotech Therapy (Signal-Cell Skin Facial & Scalp Therapy) + LED light", working_id = "1947811726971905615". Speak one filler phrase from the TOOL-CALL FILLER set, then call universal_router. Per CONFIRM_SERVICE FILLER RULE. HALT.
  
 -
  ## PRACTITIONER-ONLY PATH
