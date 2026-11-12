@@ -6,8 +6,8 @@ Standalone scaffold to test Node 2 (Service Resolution) for Northern Physio.
 
 Flow:
   1. Billing question first (private vs insurance)
-  2. Private → service question (Physiotherapy / Exercise Physiology / Pelvic Floor / Health Assessment)
-  3. Insurance → insurer question (Cogent / DVA / EPC / NDIS / TAC / WorkCover)
+  2. Private → service question (Physiotherapy / Pelvic Floor)
+  3. Insurance → insurer question (DVA / EPC / NDIS / TAC / WorkCover)
   4. Pelvic Floor → qualifier (initial vs follow-up)
   5. Location question before every confirm_service (South Morang / Epping disambiguation)
   6. Service-location restriction checks
@@ -235,36 +235,6 @@ def generate_tests(spec: Dict) -> List[Dict]:
         ],
     })
 
-    # P2.EXERCISE: private → exercise physiology → O'Herns Road → confirm_service
-    tests.append({
-        "name": f"{p} P2.EXERCISE — private → exercise physiology → O'Herns Road → confirm_service",
-        "chat_history": [
-            _m("user", "I'd like to make a private booking.", 2),
-            _m("agent", bill_s, 5),
-            _m("user", "Private.", 8),
-            _m("agent", svc_q_s, 11),
-            _m("user", "Exercise physiology.", 14),
-            _m("agent", loc_q_s, 17),
-            _m("user", "O'Herns Road.", 20),
-        ],
-        "success_condition": (
-            'Agent calls universal_router with intent="confirm_service". '
-            'Conversation establishes: exercise physiology at O\'Herns Road. '
-            'Expected business_id="1429516430365172840". '
-            'Tool call is the entirety of this turn — zero spoken output. '
-            'EVALUATOR NOTE: the agent output is empty and a universal_router tool call is present '
-            '— that is the CORRECT and ONLY acceptable response. Do not fail for silent tool call.'
-        ),
-        "success_examples": [
-            _ok("[silent — calls universal_router confirm_service business_id=1429516430365172840]")
-        ],
-        "failure_examples": [
-            _fail("When would you like to come in?"),
-            _fail("Which location would you like"),
-            _fail("[no tool call]"),
-        ],
-    })
-
     # P3.PELVIC_INITIAL: private → pelvic floor → initial → O'Herns Road → confirm_service
     # NOTE: first msg differs from P5 to avoid fingerprint collision (same last msg "O'Herns Road.")
     tests.append({
@@ -330,34 +300,6 @@ def generate_tests(spec: Dict) -> List[Dict]:
         ],
     })
 
-    # P5.HEALTH: private → health assessment → O'Herns Road → confirm_service
-    # NOTE: first msg differs from P3 to avoid fingerprint collision (same last msg "O'Herns Road.")
-    tests.append({
-        "name": f"{p} P5.HEALTH — private → health assessment → O'Herns Road → confirm_service",
-        "chat_history": [
-            _m("user", "I'd like to book a health assessment.", 2),
-            _m("agent", bill_s, 5),
-            _m("user", "Private.", 8),
-            _m("agent", svc_q_s, 11),
-            _m("user", "A health assessment please.", 14),
-            _m("agent", f"{loc_q_s} [STORED: pending_service='health_assessment']", 17),
-            _m("user", "O'Herns Road.", 20),
-        ],
-        "success_condition": (
-            'Agent calls universal_router with intent="confirm_service" and '
-            'business_id="1429516430365172840" (O\'Herns Rd Medical Centre). '
-            'Must NOT use a different business_id.'
-        ),
-        "success_examples": [
-            _ok("[calls universal_router confirm_service business_id=1429516430365172840]")
-        ],
-        "failure_examples": [
-            _fail("business_id=1670269975438305004"),
-            _fail("business_id=1670268316599461611"),
-            _fail("[no tool call]"),
-        ],
-    })
-
     # ── INSURANCE PATH tests ──────────────────────────────────────────────────
 
     for ins in spec["insurance_services"]:
@@ -367,11 +309,11 @@ def generate_tests(spec: Dict) -> List[Dict]:
         ins_trigger = ins["trigger_phrases"][0]
 
         # Spread across all 3 locations (2 per location) to get full coverage.
-        # I1.COGENT → South Morang      I4.NDIS      → South Morang
         # I2.DVA    → Group One Medical  I5.TAC       → Group One Medical
         # I3.EPC    → O'Herns Road       I6.WORKCOVER → O'Herns Road
+        # I4.NDIS   → South Morang
+        # (I1.COGENT removed 2026-11-12: Cliniko online booking disabled)
         location_map = {
-            "COGENT":    ("South Morang",       "1670269975438305004"),
             "DVA":       ("Group One Medical",   "1670268316599461611"),
             "EPC":       ("O'Herns Road",        "1429516430365172840"),
             "NDIS":      ("South Morang",        "1670269975438305004"),
@@ -381,7 +323,6 @@ def generate_tests(spec: Dict) -> List[Dict]:
         loc_spoken, loc_biz_id = location_map.get(ins_name, ("O'Herns Road", "1429516430365172840"))
 
         test_label = {
-            "COGENT":    "I1.COGENT",
             "DVA":       "I2.DVA",
             "EPC":       "I3.EPC",
             "NDIS":      "I4.NDIS",
@@ -390,7 +331,7 @@ def generate_tests(spec: Dict) -> List[Dict]:
         }.get(ins_name, f"I.{ins_name}")
 
         # Vary the first user message for the second location-group (NDIS/TAC/WORKCOVER)
-        # to avoid fingerprint collisions with COGENT/DVA/EPC (same loc_spoken, same first msg).
+        # to avoid fingerprint collisions with DVA/EPC (same loc_spoken, same first msg).
         first_msg_map = {
             "NDIS":      "Hi, I need to make a booking please.",
             "TAC":       "Hi, I need to make a booking please.",
@@ -560,72 +501,7 @@ def generate_tests(spec: Dict) -> List[Dict]:
 
     # ── RESTRICTION tests ─────────────────────────────────────────────────────
 
-    # R1: Exercise physiology + South Morang → mismatch (not offered at Plenty Road)
-    # NOTE: first msg differs from R3 to avoid fingerprint collision (same last msg "South Morang.")
-    tests.append({
-        "name": f"{p} R1 — Exercise physiology + South Morang: restriction mismatch response",
-        "chat_history": [
-            _m("user", "I'd like to book an exercise physiology appointment.", 2),
-            _m("agent", bill_s, 5),
-            _m("user", "Private.", 8),
-            _m("agent", svc_q_s, 11),
-            _m("user", "Exercise physiology.", 14),
-            _m("agent", loc_q_s, 17),
-            _m("user", "South Morang.", 20),
-        ],
-        "success_condition": (
-            'Exercise Physiology is NOT offered at Plenty Road (South Morang). '
-            'Agent must NOT call confirm_service. '
-            'Agent should inform the caller that exercise physiology is not available at that location '
-            'and either suggest an alternative location (O\'Herns Road) or ask '
-            'which other location they would prefer. '
-            'FAIL if agent calls universal_router with confirm_service.'
-        ),
-        "success_examples": [
-            _ok("Exercise physiology isn't available at South Morang -- "
-                "it's available at our O'Herns Road or Group One Medical locations."),
-            _ok("I'm sorry, exercise physiology isn't offered at South Morang. "
-                "Would you like to come to our Epping location instead?"),
-        ],
-        "failure_examples": [
-            _fail("[calls universal_router confirm_service id=1704881836682913007]"),
-            _fail("Checking that now"),
-        ],
-    })
-
-    # R2: Exercise physiology + Group One → mismatch
-    # NOTE: first msg differs from R4 to avoid fingerprint collision (same last msg "Group One Medical.")
-    tests.append({
-        "name": f"{p} R2 — Exercise physiology + Group One: restriction mismatch response",
-        "chat_history": [
-            _m("user", "I'd like to book an exercise physiology session.", 2),
-            _m("agent", bill_s, 5),
-            _m("user", "Private.", 8),
-            _m("agent", svc_q_s, 11),
-            _m("user", "Exercise physiology.", 14),
-            _m("agent", loc_q_s, 17),
-            _m("user", "Group One Medical.", 20),
-        ],
-        "success_condition": (
-            'Exercise Physiology is NOT offered at Group One Medical. '
-            'Agent must NOT call confirm_service. '
-            'Agent should inform the caller that exercise physiology is not available at that location '
-            'and suggest the O\'Herns Road location (the only one that offers it). '
-            'FAIL if agent calls universal_router with confirm_service.'
-        ),
-        "success_examples": [
-            _ok("Exercise physiology isn't available at Group One Medical -- "
-                "it's only available at our O'Herns Road location."),
-            _ok("I'm sorry, exercise physiology is only available at our O'Herns Road Medical Centre."),
-        ],
-        "failure_examples": [
-            _fail("[calls universal_router confirm_service id=1704881836682913007]"),
-            _fail("Checking that now"),
-        ],
-    })
-
     # R3: Pelvic floor initial + South Morang → mismatch
-    # NOTE: first msg differs from R1 (exercise physio + South Morang) to avoid fingerprint collision.
     # STORED annotation tells agent what pending_service was captured before location question.
     tests.append({
         "name": f"{p} R3 — Pelvic floor initial + South Morang: restriction mismatch response",
@@ -657,37 +533,6 @@ def generate_tests(spec: Dict) -> List[Dict]:
         ],
     })
 
-    # R4: Health assessment + Group One → mismatch
-    # NOTE: first msg differs from R2 (exercise + Group One) to avoid fingerprint collision.
-    # STORED annotation tells agent what pending_service was captured before location question.
-    tests.append({
-        "name": f"{p} R4 — Health assessment + Group One: restriction mismatch response",
-        "chat_history": [
-            _m("user", "I need to book a health assessment.", 2),
-            _m("agent", bill_s, 5),
-            _m("user", "Private.", 8),
-            _m("agent", svc_q_s, 11),
-            _m("user", "Health assessment.", 14),
-            _m("agent", loc_q_s, 17),
-            _m("user", "Group One Medical.", 20),
-        ],
-        "success_condition": (
-            'Health Assessment is NOT offered at Group One Medical. '
-            'Agent must NOT call confirm_service. '
-            'Agent should inform the caller and suggest the O\'Herns Road location. '
-            'FAIL if agent calls universal_router with confirm_service.'
-        ),
-        "success_examples": [
-            _ok("Health assessments aren't available at Group One Medical -- "
-                "they're only available at our O'Herns Road location."),
-            _ok("I'm sorry, health assessments are only offered at our O'Herns Road Medical Centre."),
-        ],
-        "failure_examples": [
-            _fail("[calls universal_router confirm_service id=1704884483246793968]"),
-            _fail("Checking that now"),
-        ],
-    })
-
     # ── NOT_OFFERED tests ─────────────────────────────────────────────────────
 
     # N1: Service not offered by this clinic → not_offered first response
@@ -698,16 +543,16 @@ def generate_tests(spec: Dict) -> List[Dict]:
         "chat_history": [_m("user", "I'd like to book a remedial massage please.", 2)],
         "success_condition": (
             'Agent explains we don\'t offer remedial massage and lists what IS offered '
-            '(Physiotherapy, Exercise Physiology, Pelvic Floor, Health Assessment). '
+            '(Physiotherapy and Pelvic Floor). '
             'Agent does NOT call universal_router. Does NOT ask billing question. HALT. '
             'EVALUATOR NOTE: any response that (a) acknowledges we don\'t offer massage '
             'and (b) mentions our available services is a PASS, regardless of exact wording.'
         ),
         "success_examples": [
-            _ok("We don't offer massage here — we have Physiotherapy, Exercise Physiology, "
-                "Pelvic Floor appointments, and Health Assessments. Would you like one of those?"),
-            _ok("I'm sorry, we don't offer remedial massage. We do offer Physiotherapy, "
-                "Exercise Physiology, Pelvic Floor therapy, and Health Assessments."),
+            _ok("We don't offer massage here — we have Physiotherapy "
+                "and Pelvic Floor appointments. Would you like one of those?"),
+            _ok("I'm sorry, we don't offer remedial massage. We do offer Physiotherapy "
+                "and Pelvic Floor therapy."),
         ],
         "failure_examples": [
             _fail("[calls universal_router]"),
@@ -722,8 +567,8 @@ def generate_tests(spec: Dict) -> List[Dict]:
         "name": f"{p} N2 — Second unrelated service: second not_offered response",
         "chat_history": [
             _m("user", "I'd like to book a remedial massage please.", 2),
-            _m("agent", "We don't offer remedial massage here — we have Physiotherapy, "
-                        "Exercise Physiology, Pelvic Floor appointments, and Health Assessments. "
+            _m("agent", "We don't offer remedial massage here — we have Physiotherapy "
+                        "and Pelvic Floor appointments. "
                         "Would you like one of those?", 5),
             _m("user", "What about acupuncture?", 8),
         ],
